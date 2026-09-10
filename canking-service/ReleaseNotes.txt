@@ -1,0 +1,6 @@
+Kvaser CanKing 7 DAQ Decoder extension
+===============================================================================
+
+New Features and Fixed Problems in version 1.0.0
+-------------------------------------------------------------------------------
+- Initial release.

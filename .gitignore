@@ -1,0 +1,3 @@
+# Cargo workspace build output (shared by all Rust crates)
+/target
+/tests/ck-cli/out

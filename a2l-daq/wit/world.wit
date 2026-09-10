@@ -1,0 +1,255 @@
+package kvaser:a2l-daq@1.0.0;
+
+interface generator {
+  // ---- Protocol ----
+
+  /// The measurement protocol used to perform DAQ. Detected from the A2L's `IF_DATA` blocks and selected by the user.
+  enum protocol {
+    xcp,
+    ccp,
+  }
+
+  // ---- DAQ list structure ----
+
+  record odt-entry {
+    names: list<string>,
+    ecu-address: u64,
+    size: u16,
+  }
+
+  record odt {
+    entries: list<odt-entry>,
+  }
+
+  /// Where a DAQ list's CAN identifier comes from, mirroring the A2L `DAQ_LIST_CAN_ID`
+  /// declaration (XCP) or `CAN_ID_FIXED` (CCP).
+  variant can-id-source {
+    /// No override: shares the transport's default id, multiplexed by PID.
+    shared,
+    /// Always transmits on this id; the ECU mandates it, so the frontend must not offer to change it.
+    fixed(u32),
+    /// The ECU accepts a runtime id assignment (XCP `SET_DAQ_ID`); `none` means unassigned,
+    /// which behaves like `shared` until the frontend supplies one via `daq-can-id-overrides`.
+    dynamic(option<u32>),
+  }
+
+  record daq-list {
+    id: u16,
+    first-pid: u16,
+    odts: list<odt>,
+    event: option<string>,
+    can-id: can-id-source,
+  }
+
+  // ---- Diagnostics ----
+
+  record unplaced-signal {
+    name: string,
+    event: option<string>,
+    size: u16,
+    ecu-address: u64,
+  }
+
+  record unmeasurable-signal {
+    name: string,
+    issue: virtual-issue,
+  }
+
+  record colliding-names {
+    /// The single identifier every one of `names` sanitises to.
+    sanitized: string,
+    /// The original A2L names, in the order the DAQ lists carry them.
+    names: list<string>,
+  }
+
+  /// A non-fatal issue. The caller decides how to surface it.
+  variant diagnostic {
+    /// A signal was assigned to an event but no DAQ list slot remained.
+    unplaced-signal(unplaced-signal),
+    /// An assignment named a signal not present in the parsed project.
+    unknown-signal(string),
+    /// A selected signal is absent from the parsed project (unknown name or unparsable MEASUREMENT block) and was dropped from all outputs.
+    dropped-signal(string),
+    /// A selected virtual measurement that cannot be measured and was dropped from all outputs.
+    unmeasurable-signal(unmeasurable-signal),
+    /// Two or more signals sanitise to one DBC identifier, so the generated DBC and t-script cannot tell them apart.
+    colliding-names(colliding-names),
+  }
+
+  // ---- Inputs / outputs ----
+
+  /// Maps an XCP event (by name) to the signals assigned to it.
+  record event-assignment {
+    event: string,
+    signals: list<string>,
+  }
+
+  /// An XCP event channel the ECU can trigger DAQ sampling on. The frontend
+  /// uses these to populate the signal-to-event assignment UI. `name` is what
+  /// `event-assignment.event` must match; `time-cycle`/`time-unit` describe the
+  /// channel's sampling rate for display.
+  record event-info {
+    name: string,
+    channel: u32,
+    time-cycle: u32,
+    time-unit: u32,
+  }
+  
+  record virtual-issue {
+    label: string,
+    detail: string,
+  }
+
+  /// Per-signal metadata for the selection UI. `description` is the
+  /// MEASUREMENT long identifier; `unit` is resolved via the signal's
+  /// COMPU_METHOD (empty when there is none).
+  record signal-summary {
+    name: string,
+    description: string,
+    unit: string,
+    ecu-address: u64,
+    size: u16,
+    virtual-input: option<string>,
+    virtual-issue: option<virtual-issue>,
+    groups: list<string>,
+  }
+
+  /// A MEASUREMENT GROUP declared in the A2L
+  record group-info {
+    name: string,
+    description: string,
+    root: bool,
+    sub-groups: list<string>,
+  }
+
+  /// Bus/transport parameters the A2L declares for one protocol
+  record transport-info {
+    protocol: protocol,
+    /// True when the A2L declares CAN FD (XCP `CAN_FD` block).
+    can-fd: bool,
+    /// Arbitration/nominal bit rate in bit/s, if the A2L declares one.
+    bitrate: option<u32>,
+    /// CAN FD data-phase bit rate in bit/s, if declared.
+    data-bitrate: option<u32>,
+  }
+
+  /// Everything the selection UI needs from an A2L
+  record a2l-summary {
+    signals: list<signal-summary>,
+    events: list<event-info>,
+    protocols: list<protocol>,
+    transports: list<transport-info>,
+    groups: list<group-info>,
+  }
+
+  /// Output
+  record core-output {
+    daq-lists: list<daq-list>,
+    dbc: string,
+    warnings: list<diagnostic>,
+  }
+
+  /// Output of `build-config`
+  record config-output {
+    config-json: string,
+    dbc: string,
+    warnings: list<diagnostic>,
+  }
+
+  /// List every MEASUREMENT signal name and XCP event channel in the A2L
+  inspect: func(a2l: string) -> result<a2l-summary, string>;
+
+  /// Parse `a2l` keeping `selected` signals, apply `assignments`, then pack the DAQ lists and render 
+  /// the DBC for `protocol`. `source-name` is the source A2L file name, embedded as a traceability comment
+  /// in the DBC. The error is a human-readable message.
+  build: func(
+    a2l: string,
+    source-name: string,
+    selected: list<string>,
+    assignments: list<event-assignment>,
+    protocol: protocol,
+  ) -> result<core-output, string>;
+
+  /// `daq-can-id-overrides` assigns a CAN id to a `dynamic` DAQ list (by `daq-list.id`), for the
+  /// ECUs where the master picks each list's id at runtime.
+  build-config: func(
+    a2l: string,
+    source-name: string,
+    selected: list<string>,
+    assignments: list<event-assignment>,
+    start-daq: bool,
+    daq-can-id-overrides: list<tuple<u16, u32>>,
+    protocol: protocol,
+  ) -> result<config-output, string>;
+
+  // ---- T-script generation ----
+
+  /// One signal trigger condition; conditions are combined with AND.
+  /// `signal` is the A2L signal name (sanitized to its DBC identifier
+  /// internally), `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`, and
+  /// `value` is a numeric literal.
+  record trigger-condition {
+    signal: string,
+    op: string,
+    value: string,
+  }
+
+  /// CAN framing mode for the generated t-script.
+  enum can-mode {
+    can,
+    can-fd,
+  }
+
+  /// Manual bus-parameter override for the generated t-script.
+  record bus-override {
+    mode: can-mode,
+    bitrate: u32,
+    data-bitrate: option<u32>,
+  }
+
+  /// How the generated t-script reaches signal values.
+  enum signal-access {
+    dbc,
+    inline,
+  }
+
+  /// Options for `build-tscript` beyond what the A2L itself provides.
+  record tscript-options {
+    /// CAN channel index the script configures (usually 0).
+    channel-index: u32,
+    /// Minimum milliseconds logged before the trigger fires.
+    pretrigger-ms: u32,
+    /// Stop logging this many ms after the trigger fires (none = no timer).
+    timer-ms: option<u32>,
+    /// Start-logger trigger conditions; empty = no signal trigger.
+    conditions: list<trigger-condition>,
+    /// Manual bus-parameter override; none = derive bus params from the A2L.
+    bus: option<bus-override>,
+    /// Whether the script reads signals through the DBC or decodes them itself.
+    signal-access: signal-access,
+  }
+
+  /// Output of `build-tscript`
+  record tscript-output {
+    tscript: string,
+    warnings: list<diagnostic>,
+  }
+
+  /// Parse `a2l` and pack the DAQ lists like `build`, then render a Memorator
+  /// t-script that configures the CAN bus, runs the DAQ init sequence,
+  /// and starts logging when the trigger conditions are met.
+  /// See `build-config` for `daq-can-id-overrides`.
+  build-tscript: func(
+    a2l: string,
+    source-name: string,
+    selected: list<string>,
+    assignments: list<event-assignment>,
+    options: tscript-options,
+    daq-can-id-overrides: list<tuple<u16, u32>>,
+    protocol: protocol,
+  ) -> result<tscript-output, string>;
+}
+
+world a2l-daq {
+  export generator;
+}

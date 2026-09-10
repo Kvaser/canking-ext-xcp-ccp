@@ -1,0 +1,515 @@
+//! Parsing the module-level `/begin IF_DATA XCP ... /end IF_DATA` block: DAQ list
+//! capabilities, event channels, and the `XCP_ON_CAN` transport parameters.
+
+use super::tokenizer::{extract_block, parse_u16_token, parse_u32_token};
+use super::{
+    ByteOrder, CanFdInfo, CanIdSource, DaqInfo, DaqListDef, DaqMode, EventEntry, EventInfo,
+    Protocol, ProtocolLayerInfo, XcpData, XcpInfo,
+};
+
+/// Finds the module-level `/begin IF_DATA XCP /end IF_DATA` and returns the parsed
+/// `XcpData`, or `None` if the file has no XCP interface at all.
+pub(super) fn parse_if_data_xcp(tokens: &[String]) -> Option<XcpData> {
+    let mut fallback: Option<&[String]> = None;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == "/begin"
+            && tokens.get(i + 1).map(String::as_str) == Some("IF_DATA")
+            && tokens
+                .get(i + 2)
+                .and_then(|t| Protocol::from_if_data_tag(t))
+                == Some(Protocol::Xcp)
+        {
+            i += 3; // consume /begin IF_DATA XCP
+            let block = extract_block(tokens, &mut i);
+            if describes_the_interface(block) {
+                return Some(parse_xcp_contents(block));
+            }
+            fallback.get_or_insert(block);
+        } else {
+            i += 1;
+        }
+    }
+
+    fallback.map(parse_xcp_contents)
+}
+
+/// Whether an `IF_DATA XCP` block carries interface-level content rather than the per-measurement `DAQ_EVENT` reference.
+fn describes_the_interface(block: &[String]) -> bool {
+    const INTERFACE_BLOCKS: [&str; 3] = ["DAQ", "XCP_ON_CAN", "PROTOCOL_LAYER"];
+    block
+        .windows(2)
+        .any(|w| w[0] == "/begin" && INTERFACE_BLOCKS.contains(&w[1].as_str()))
+}
+
+/// Parses a `IF_DATA XCP` block.
+fn parse_xcp_contents(tokens: &[String]) -> XcpData {
+    let mut daq_info = DaqInfo::default();
+    let mut event_info = EventInfo::default();
+    let mut xcp_info: Option<XcpInfo> = None;
+    let mut protocol_layer: Option<ProtocolLayerInfo> = None;
+    let mut daq_list_can_ids: Vec<(u16, CanIdSource)> = Vec::new();
+
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == "/begin" {
+            let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
+            i += 2;
+            let block = extract_block(tokens, &mut i);
+
+            match keyword {
+                "DAQ" => {
+                    let (info, events) = parse_daq_contents(block);
+                    daq_info = info;
+                    event_info.events = events;
+                }
+                "XCP_ON_CAN" => {
+                    let (info, overrides) = parse_xcp_on_can(block);
+                    xcp_info = info;
+                    daq_list_can_ids = overrides;
+                }
+                "PROTOCOL_LAYER" => {
+                    protocol_layer = Some(parse_protocol_layer(block));
+                }
+                _ => {} // SEGMENT, PAG, PGM, etc.
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    for (list_id, can_id) in daq_list_can_ids {
+        if let Some(def) = daq_info
+            .daq_lists
+            .iter_mut()
+            .find(|d| d.identifier == list_id)
+        {
+            def.can_id = can_id;
+        }
+    }
+
+    XcpData {
+        daq_info,
+        event_info,
+        xcp_info,
+        protocol_layer,
+    }
+}
+
+/// Parses a `/begin DAQ` block, extracting global header parameters, DAQ_LIST, and EVENT sub-blocks.
+fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
+    let mut daq_lists = Vec::new();
+    let mut events = Vec::new();
+    let mut max_odt_entry_size: u16 = 0;
+    let mut timestamp_size: u16 = 0;
+    let mut timestamp_fixed = false;
+
+    let mode = match tokens.first().map(String::as_str) {
+        Some("STATIC") => DaqMode::Static,
+        Some("DYNAMIC") => DaqMode::Dynamic,
+        _ => DaqMode::StaticAndDynamic,
+    };
+
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == "/begin" {
+            let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
+            i += 2;
+            let block = extract_block(tokens, &mut i);
+
+            match keyword {
+                "DAQ_LIST" => {
+                    if let Some(entry) = parse_daq_list_block(block) {
+                        daq_lists.push(entry);
+                    }
+                }
+                "EVENT" => {
+                    if let Some(entry) = parse_event_block(block) {
+                        events.push(entry);
+                    }
+                }
+                "TIMESTAMP_SUPPORTED" => {
+                    let (size, fixed) = parse_timestamp_supported(block);
+                    timestamp_size = size;
+                    timestamp_fixed = fixed;
+                }
+                _ => {} // PRESCALER_SUPPORTED, etc.
+            }
+        } else {
+            // Scan header-level tokens for the per-entry size keyword.
+            if tokens[i] == "GRANULARITY_ODT_ENTRY_SIZE_DAQ_BYTE" {
+                if let Some(v) = tokens.get(i + 1).and_then(|t| parse_u16_token(t)) {
+                    max_odt_entry_size = v;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    let daq_info = DaqInfo {
+        mode,
+        daq_lists,
+        max_odt_entry_size,
+        timestamp_size,
+        timestamp_fixed,
+    };
+    (daq_info, events)
+}
+
+/// Parses a `/begin TIMESTAMP_SUPPORTED` block, returning the timestamp width in
+/// bytes and whether `TIMESTAMP_FIXED` is set.
+fn parse_timestamp_supported(tokens: &[String]) -> (u16, bool) {
+    let mut size = 0u16;
+    let mut fixed = false;
+    for t in tokens {
+        match t.as_str() {
+            "SIZE_BYTE" => size = 1,
+            "SIZE_WORD" => size = 2,
+            "SIZE_DWORD" => size = 4,
+            "TIMESTAMP_FIXED" => fixed = true,
+            _ => {}
+        }
+    }
+    (size, fixed)
+}
+
+/// Parses a `/begin DAQ_LIST` block.
+///
+/// Returns a `DaqListDef` with the list identifier, number of ODTs, maximum ODT entries, and optional event channel and first PID.
+fn parse_daq_list_block(tokens: &[String]) -> Option<DaqListDef> {
+    let identifier = parse_u16_token(tokens.first()?)?;
+    let mut nr_odt = 0u16;
+    let mut max_odt_entries = 0u16;
+    let mut event_fixed = None;
+    let mut first_pid = None;
+
+    let mut i = 1;
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            "FIRST_PID" => {
+                first_pid = tokens.get(i + 1).and_then(|t| parse_u16_token(t));
+                i += 2;
+            }
+            "MAX_ODT" => {
+                nr_odt = tokens
+                    .get(i + 1)
+                    .and_then(|t| parse_u16_token(t))
+                    .unwrap_or(0);
+                i += 2;
+            }
+            "MAX_ODT_ENTRIES" => {
+                max_odt_entries = tokens
+                    .get(i + 1)
+                    .and_then(|t| parse_u16_token(t))
+                    .unwrap_or(0);
+                i += 2;
+            }
+            "EVENT_FIXED" => {
+                event_fixed = tokens.get(i + 1).and_then(|t| parse_u16_token(t));
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    Some(DaqListDef {
+        identifier,
+        nr_odt,
+        max_odt_entries,
+        event_fixed,
+        first_pid,
+        can_id: CanIdSource::Default, // filled in later from any DAQ_LIST_CAN_ID override
+    })
+}
+
+/// Parses a `/begin EVENT` block.
+///
+/// Returns an `EventEntry` with the channel number, name, and optional time cycle/unit.
+pub(super) fn parse_event_block(tokens: &[String]) -> Option<EventEntry> {
+    let name = tokens
+        .first()
+        .filter(|t| t.starts_with('"'))
+        .map(|t| t.trim_matches('"').to_string())?;
+    let channel = parse_u32_token(tokens.get(2)?)?;
+    let time_cycle = tokens.get(5).and_then(|t| parse_u32_token(t)).unwrap_or(0);
+    let time_unit = tokens.get(6).and_then(|t| parse_u32_token(t)).unwrap_or(0);
+
+    Some(EventEntry {
+        channel,
+        name,
+        time_cycle,
+        time_unit,
+    })
+}
+
+/// Parses a `/begin XCP_ON_CAN` block.
+///
+/// Returns an `XcpInfo` with the version, CAN IDs, baudrate, and optional CAN FD info,
+/// plus any `DAQ_LIST_CAN_ID` overrides found for the caller to apply onto the DAQ lists declared elsewhere in the module.
+fn parse_xcp_on_can(tokens: &[String]) -> (Option<XcpInfo>, Vec<(u16, CanIdSource)>) {
+    let Some(version) = tokens.first().and_then(|t| parse_u32_token(t)) else {
+        return (None, Vec::new());
+    };
+    let mut can_id_broadcast = None;
+    let mut can_id_master = None;
+    let mut can_id_slave = None;
+    let mut baudrate = None;
+    let mut can_fd = None;
+    let mut daq_list_can_ids: Vec<(u16, CanIdSource)> = Vec::new();
+
+    let mut i = 1;
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            "CAN_ID_BROADCAST" => {
+                can_id_broadcast = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                i += 2;
+            }
+            "CAN_ID_MASTER" => {
+                can_id_master = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                i += 2;
+            }
+            "CAN_ID_SLAVE" => {
+                can_id_slave = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                i += 2;
+            }
+            "BAUDRATE" => {
+                baudrate = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                i += 2;
+            }
+            "/begin" => {
+                let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
+                i += 2;
+                let block = extract_block(tokens, &mut i);
+                match keyword {
+                    "CAN_FD" => can_fd = Some(parse_can_fd(block)),
+                    "DAQ_LIST_CAN_ID" => {
+                        if let Some(pair) = parse_daq_list_can_id(block) {
+                            daq_list_can_ids.push(pair);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    (
+        Some(XcpInfo {
+            version,
+            can_id_broadcast,
+            can_id_master,
+            can_id_slave,
+            baudrate,
+            can_fd,
+        }),
+        daq_list_can_ids,
+    )
+}
+
+/// Parses a `/begin DAQ_LIST_CAN_ID` block: the DAQ list identifier, followed by either
+/// `FIXED <id>` (the list always transmits on `id`) or `VARIABLE` it can be set
+///
+/// Returns `(daq list identifier, CAN id source)`.
+fn parse_daq_list_can_id(tokens: &[String]) -> Option<(u16, CanIdSource)> {
+    let daq_list = parse_u16_token(tokens.first()?)?;
+    let source = match tokens.get(1).map(String::as_str) {
+        Some("VARIABLE") => CanIdSource::Dynamic { assigned: None },
+        Some("FIXED") => CanIdSource::Fixed {
+            id: parse_u32_token(tokens.get(2)?)?,
+        },
+        _ => return None,
+    };
+    Some((daq_list, source))
+}
+
+/// Parses a `/begin CAN_FD` block, extracting the frame size and data baud rate.
+///
+/// Returns a `CanFdInfo` with the maximum DLC and optional data transfer baud rate.
+fn parse_can_fd(tokens: &[String]) -> CanFdInfo {
+    let mut max_dlc = 0u16;
+    let mut data_baudrate = None;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            "MAX_DLC" => {
+                max_dlc = tokens
+                    .get(i + 1)
+                    .and_then(|t| parse_u16_token(t))
+                    .unwrap_or(0);
+                i += 2;
+            }
+            "CAN_FD_DATA_TRANSFER_BAUDRATE" => {
+                data_baudrate = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    CanFdInfo {
+        max_dlc,
+        data_baudrate,
+    }
+}
+
+/// Parses the content tokens of a `PROTOCOL_LAYER` block.
+///
+/// Returns a `ProtocolLayerInfo` with the maximum CTO/DTO sizes and optional byte order.
+fn parse_protocol_layer(tokens: &[String]) -> ProtocolLayerInfo {
+    let max_cto = tokens.get(8).and_then(|t| parse_u16_token(t)).unwrap_or(0);
+    let max_dto = tokens.get(9).and_then(|t| parse_u16_token(t)).unwrap_or(0);
+    let mut byte_order = None;
+    for t in tokens.iter().skip(10) {
+        match t.as_str() {
+            "BYTE_ORDER_MSB_LAST" => {
+                byte_order = Some(ByteOrder::MsbLast);
+            }
+            "BYTE_ORDER_MSB_FIRST" => {
+                byte_order = Some(ByteOrder::MsbFirst);
+            }
+            _ => {}
+        }
+    }
+    ProtocolLayerInfo {
+        byte_order,
+        max_cto,
+        max_dto,
+    }
+}
+
+// ------------------------------- Unit tests ------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::a2l::tokenizer::tokenize_checked;
+
+    const MEASUREMENT_FIRST: &str = r#"
+    /begin MEASUREMENT Rpm "Engine speed" UWORD Rpm_CM 0 0 0 8000
+      ECU_ADDRESS 0x1000
+      /begin IF_DATA XCP
+        /begin DAQ_EVENT FIXED_EVENT_LIST EVENT 0x0001 /end DAQ_EVENT
+      /end IF_DATA
+    /end MEASUREMENT
+    /begin IF_DATA XCP
+      /begin XCP_ON_CAN
+        0x0105 CAN_ID_MASTER 0x0455 CAN_ID_SLAVE 0x0456 BAUDRATE 500000
+      /end XCP_ON_CAN
+      /begin DAQ
+        DYNAMIC
+        /begin EVENT "Task10ms" "10ms" 0x0000 DAQ 0x01 0x0A 0x06 0xFF /end EVENT
+      /end DAQ
+    /end IF_DATA
+    "#;
+
+    #[test]
+    fn the_module_interface_wins_over_a_measurements_daq_event() {
+        let tokens = tokenize_checked(MEASUREMENT_FIRST).unwrap();
+        let xcp = parse_if_data_xcp(&tokens).expect("XCP interface found");
+        let info = xcp
+            .xcp_info
+            .expect("transport comes from the module-level block, not the DAQ_EVENT one");
+        assert_eq!(info.can_id_master, Some(0x455));
+        assert_eq!(info.can_id_slave, Some(0x456));
+        assert_eq!(xcp.event_info.events.len(), 1);
+        assert_eq!(xcp.event_info.events[0].name, "Task10ms");
+    }
+
+    #[test]
+    fn a_daq_event_only_file_still_yields_something() {
+        let tokens = tokenize_checked(
+            r#"
+            /begin IF_DATA XCP
+              /begin DAQ_EVENT FIXED_EVENT_LIST EVENT 0x0001 /end DAQ_EVENT
+            /end IF_DATA
+            "#,
+        )
+        .unwrap();
+        let xcp = parse_if_data_xcp(&tokens).expect("the block is still an XCP interface");
+        assert!(xcp.xcp_info.is_none());
+    }
+
+    #[test]
+    fn daq_list_can_id_overrides_the_owning_list_only() {
+        let tokens = tokenize_checked(
+            r#"
+            /begin IF_DATA XCP
+              /begin XCP_ON_CAN
+                0x0105 CAN_ID_MASTER 0x0455 CAN_ID_SLAVE 0x0456 BAUDRATE 500000
+                /begin DAQ_LIST_CAN_ID
+                  0x0001 FIXED 0x0789
+                /end DAQ_LIST_CAN_ID
+              /end XCP_ON_CAN
+              /begin DAQ
+                STATIC
+                /begin DAQ_LIST 0x0000 MAX_ODT 0x01 MAX_ODT_ENTRIES 0x01 /end DAQ_LIST
+                /begin DAQ_LIST 0x0001 MAX_ODT 0x01 MAX_ODT_ENTRIES 0x01 /end DAQ_LIST
+              /end DAQ
+            /end IF_DATA
+            "#,
+        )
+        .unwrap();
+        let xcp = parse_if_data_xcp(&tokens).expect("XCP interface found");
+        let lists = xcp.daq_info.daq_lists;
+        assert_eq!(lists.len(), 2);
+        assert_eq!(
+            lists[0].can_id,
+            CanIdSource::Default,
+            "list 0 keeps transmitting on CAN_ID_SLAVE"
+        );
+        assert_eq!(
+            lists[1].can_id,
+            CanIdSource::Fixed { id: 0x789 },
+            "list 1 has its own fixed CAN id"
+        );
+    }
+
+    #[test]
+    fn daq_list_can_id_variable_marks_the_list_as_dynamic() {
+        let tokens = tokenize_checked(
+            r#"
+            /begin IF_DATA XCP
+              /begin XCP_ON_CAN
+                0x0105 CAN_ID_MASTER 0x0455 CAN_ID_SLAVE 0x0456 BAUDRATE 500000
+                /begin DAQ_LIST_CAN_ID
+                  0x0000 VARIABLE
+                /end DAQ_LIST_CAN_ID
+              /end XCP_ON_CAN
+              /begin DAQ
+                STATIC
+                /begin DAQ_LIST 0x0000 MAX_ODT 0x01 MAX_ODT_ENTRIES 0x01 /end DAQ_LIST
+              /end DAQ
+            /end IF_DATA
+            "#,
+        )
+        .unwrap();
+        let xcp = parse_if_data_xcp(&tokens).expect("XCP interface found");
+        assert_eq!(
+            xcp.daq_info.daq_lists[0].can_id,
+            CanIdSource::Dynamic { assigned: None },
+            "VARIABLE gives no id, only the capability to assign one via SET_DAQ_ID"
+        );
+    }
+
+    #[test]
+    fn no_xcp_interface_is_none() {
+        let tokens = tokenize_checked(
+            r#"
+            /begin IF_DATA ASAP1B_CCP
+              /begin TP_BLOB 0x0201 /end TP_BLOB
+            /end IF_DATA
+            "#,
+        )
+        .unwrap();
+        assert!(parse_if_data_xcp(&tokens).is_none());
+    }
+}

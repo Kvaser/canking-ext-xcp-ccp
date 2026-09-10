@@ -1,0 +1,12 @@
+{
+  "name": "ccp-sample",
+  "a2l": "a2l-daq/data/CCP/SampleECU.a2l",
+  "encoding": "latin1",
+  "protocol": "ccp",
+  "startDaq": false,
+  "signals": ["v_10V_Raw", "Raw_Throttle1", "SerialNumber", "OilTemp_Raw"],
+  "assignments": {
+    "Raster_10ms": ["v_10V_Raw", "Raw_Throttle1"],
+    "Raster_100ms": ["SerialNumber", "OilTemp_Raw"]
+  }
+}

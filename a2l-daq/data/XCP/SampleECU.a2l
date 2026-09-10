@@ -1,0 +1,378 @@
+ASAP2_VERSION 1 71
+
+/begin PROJECT SampleECU
+  "Example XCP-on-CAN project used for development and testing"
+
+  /begin HEADER
+    "Generic sample data"
+    VERSION "1.0"
+    PROJECT_NO SAMPLE_XCP
+  /end HEADER
+
+  /begin MODULE SampleECU
+    "Example module with a representative measurement set"
+
+    /begin MOD_COMMON
+      ""
+      BYTE_ORDER MSB_LAST
+    /end MOD_COMMON
+
+    /begin MOD_PAR
+      "Calibration memory layout"
+
+      /begin MEMORY_SEGMENT Calibration
+        "Calibration data"
+        DATA
+        FLASH
+        INTERN
+        0x08020000
+        0x8000
+        -1 -1 -1 -1 -1
+      /end MEMORY_SEGMENT
+    /end MOD_PAR
+
+    /begin IF_DATA XCP
+
+      /begin XCP_ON_CAN
+        0x0104                          /* XCP on CAN version */
+        CAN_ID_MASTER      0x0600       /* XCP CMD */
+        CAN_ID_SLAVE       0x0601       /* XCP RES/ERR */
+        BAUDRATE           500000       /* BAUDRATE 500 kbps */
+        SAMPLE_POINT       80           /* sampling at 80% of bit time */
+        SAMPLE_RATE        SINGLE       /* 1 sampling per bit */
+        BTL_CYCLES         16           /* 16 time quanta per bit time */
+        SJW                2            /* Sync jump width max 2 tq */
+        SYNC_EDGE          SINGLE       /* sync only on dominant to recessive edge */
+
+        /begin CAN_FD                              /* The CAN_FD block indicates the use of CAN-FD frames */
+          MAX_DLC                         24       /* 8, 12, 16, 20, 24, 32, 48 or 64 */
+          CAN_FD_DATA_TRANSFER_BAUDRATE   2000000  /* BAUDRATE in bps */
+          SAMPLE_POINT                    80       /* sampling at 80% of bit time */
+          BTL_CYCLES                      40       /* time quanta per bit */
+          SJW                             7        /* Sync jump width max 7 tq */
+          SYNC_EDGE                       SINGLE   /* on falling edge only */
+          SECONDARY_SAMPLE_POINT          80       /* sender sample point [% of complete bit time] */
+          TRANSCEIVER_DELAY_COMPENSATION  OFF
+        /end CAN_FD
+
+        /begin DAQ_LIST_CAN_ID
+          0x0000                      /* DAQ_LIST number */
+          FIXED       0x0601          /* CAN id for DAQ_LIST 0 */
+        /end DAQ_LIST_CAN_ID
+      /end XCP_ON_CAN
+
+      /begin PROTOCOL_LAYER
+        0x0104                                /* XCP protocol layer version */
+        0x0064                                /* T1 [ms] */
+        0x0064                                /* T2 [ms] */
+        0x000A                                /* T3 [ms] */
+        0x000A                                /* T4 [ms] */
+        0x000A                                /* T5 [ms] */
+        0x0000                                /* T6 [ms] */
+        0x0020                                /* T7 [ms] */
+        0x08                                  /* MAX_CTO */
+        0x0020                                /* MAX_DTO */
+
+        BYTE_ORDER_MSB_LAST
+        ADDRESS_GRANULARITY_BYTE
+
+        OPTIONAL_CMD  GET_COMM_MODE_INFO      /* 0xFB */
+        OPTIONAL_CMD  GET_ID                  /* 0xFA */
+        OPTIONAL_CMD  SET_MTA                 /* 0xF6 */
+        OPTIONAL_CMD  UPLOAD                  /* 0xF5 */
+        OPTIONAL_CMD  SHORT_UPLOAD            /* 0xF4 */
+        OPTIONAL_CMD  BUILD_CHECKSUM          /* 0xF3 */
+        OPTIONAL_CMD  SET_CAL_PAGE            /* 0xEB */
+        OPTIONAL_CMD  GET_CAL_PAGE            /* 0xEA */
+        OPTIONAL_CMD  SET_DAQ_PTR             /* 0xE2 */
+        OPTIONAL_CMD  WRITE_DAQ               /* 0xE1 */
+        OPTIONAL_CMD  SET_DAQ_LIST_MODE       /* 0xE0 */
+        OPTIONAL_CMD  GET_DAQ_LIST_MODE       /* 0xDF */
+        OPTIONAL_CMD  START_STOP_DAQ_LIST     /* 0xDE */
+        OPTIONAL_CMD  START_STOP_SYNCH        /* 0xDD */
+        OPTIONAL_CMD  GET_DAQ_CLOCK           /* 0xDC */
+        OPTIONAL_CMD  GET_DAQ_PROCESSOR_INFO  /* 0xDA */
+        OPTIONAL_CMD  FREE_DAQ                /* 0xD6 */
+        OPTIONAL_CMD  ALLOC_DAQ               /* 0xD5 */
+        OPTIONAL_CMD  ALLOC_ODT               /* 0xD4 */
+        OPTIONAL_CMD  ALLOC_ODT_ENTRY         /* 0xD3 */
+
+        COMMUNICATION_MODE_SUPPORTED  BLOCK  SLAVE
+      /end PROTOCOL_LAYER
+
+      /begin DAQ
+        DYNAMIC                               /* DAQ_CONFIG_TYPE */
+        0x0002                                /* MAX_DAQ */
+        0x0002                                /* MAX_EVENT_CHANNEL */
+        0x00                                  /* MIN_DAQ */
+
+        OPTIMISATION_TYPE_DEFAULT
+        ADDRESS_EXTENSION_FREE
+        IDENTIFICATION_FIELD_TYPE_ABSOLUTE
+        GRANULARITY_ODT_ENTRY_SIZE_DAQ_BYTE
+        0x08                                  /* max size of any ODT entry */
+        OVERLOAD_INDICATION_EVENT
+        PRESCALER_SUPPORTED
+
+        /begin TIMESTAMP_SUPPORTED
+          0x0001                               /* TIMESTAMP_TICKS */
+          SIZE_DWORD
+          UNIT_1MS
+          TIMESTAMP_FIXED
+        /end TIMESTAMP_SUPPORTED
+
+        /begin DAQ_LIST
+          0x0000                              /* DAQ_LIST_NUMBER */
+          MAX_ODT             0x08            /* max 8 ODT */
+          MAX_ODT_ENTRIES     0x08            /* max 8 entries per ODT */
+        /end DAQ_LIST
+
+        /begin DAQ_LIST
+          0x0001                              /* DAQ_LIST_NUMBER */
+          MAX_ODT             0x08            /* max 8 ODT */
+          MAX_ODT_ENTRIES     0x08            /* max 8 entries per ODT */
+        /end DAQ_LIST
+
+        /begin EVENT
+          "10ms_Cyclic"                        /* name */
+          "10ms"                               /* short name */
+          0x0000                               /* EVENT_CHANNEL_NUMBER */
+          DAQ                                  /* used only for measurement */
+          0x01                                 /* MAX_DAQ_LIST */
+          0x0A                                 /* EVENT_CHANNEL_TIME_CYCLE */
+          0x06                                 /* EVENT_CHANNEL_TIME_UNIT (1ms) */
+          0xFF                                 /* EVENT_CHANNEL_PRIORITY */
+        /end EVENT
+
+        /begin EVENT
+          "100ms_Cyclic"                       /* name */
+          "100ms"                              /* short name */
+          0x0001                               /* EVENT_CHANNEL_NUMBER */
+          DAQ                                  /* used only for measurement */
+          0x01                                 /* MAX_DAQ_LIST */
+          0x64                                 /* EVENT_CHANNEL_TIME_CYCLE */
+          0x06                                 /* EVENT_CHANNEL_TIME_UNIT (1ms) */
+          0xFE                                 /* EVENT_CHANNEL_PRIORITY */
+        /end EVENT
+      /end DAQ
+
+      /begin PAG
+        0x01                                  /* MAX_SEGMENTS */
+        FREEZE_SUPPORTED
+      /end PAG
+    /end IF_DATA
+
+    /begin MEASUREMENT VehicleSpeed_kmh
+      "Vehicle road speed"
+      ULONG
+      VehicleSpeed_kmh_CM
+      0
+      0
+      0
+      255
+      ECU_ADDRESS 0x20010000
+      FORMAT "%5.1"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT LongitudinalAccel_mps2
+      "Longitudinal acceleration"
+      SWORD
+      LongitudinalAccel_mps2_CM
+      0
+      0
+      -40.9609375
+      40.958984375
+      ECU_ADDRESS 0x20010010
+      FORMAT "%5.2"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EngineSpeed_rpm
+      "Engine rotational speed"
+      UWORD
+      EngineSpeed_rpm_CM
+      0
+      0
+      0
+      8000
+      ECU_ADDRESS 0x20010020
+      FORMAT "%5.0"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT CoolantTemp_degC
+      "Engine coolant temperature"
+      SWORD
+      CoolantTemp_degC_CM
+      0
+      0
+      -40
+      150
+      ECU_ADDRESS 0x20010030
+      FORMAT "%4.1"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT BatteryVoltage_V
+      "Supply battery voltage"
+      UWORD
+      BatteryVoltage_V_CM
+      0
+      0
+      0
+      16
+      ECU_ADDRESS 0x20010040
+      FORMAT "%4.2"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ThrottlePosition_pct
+      "Throttle pedal position"
+      UBYTE
+      ThrottlePosition_pct_CM
+      0
+      0
+      0
+      100
+      ECU_ADDRESS 0x20010050
+      FORMAT "%3.0"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EngineState
+      "Engine run state"
+      UBYTE
+      EngineState_CM
+      0
+      0
+      0
+      4
+      ECU_ADDRESS 0x20010060
+      FORMAT "%1.0"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT DiagErrorCode
+      "Active diagnostic error code"
+      UWORD
+      DiagErrorCode_CM
+      0
+      0
+      0
+      5
+      ECU_ADDRESS 0x20010070
+      FORMAT "%2.0"
+    /end MEASUREMENT
+
+    /begin COMPU_METHOD VehicleSpeed_kmh_CM
+      "linear, 1 count = 1 km/h"
+      RAT_FUNC
+      "%5.1"
+      "km/h"
+      COEFFS 0 1 0 0 0 1
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD LongitudinalAccel_mps2_CM
+      "linear, 16-bit signed over +/-41 m/s^2"
+      RAT_FUNC
+      "%5.2"
+      "m/s^2"
+      COEFFS 0 16 0 0 0 1
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD EngineSpeed_rpm_CM
+      "linear, 1 count = 1 rpm"
+      RAT_FUNC
+      "%5.0"
+      "rpm"
+      COEFFS 0 1 0 0 0 1
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD CoolantTemp_degC_CM
+      "linear, 1 count = 1 degC"
+      RAT_FUNC
+      "%4.1"
+      "degC"
+      COEFFS 0 1 0 0 0 1
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD BatteryVoltage_V_CM
+      "linear, 1000 counts = 1 V"
+      RAT_FUNC
+      "%4.2"
+      "V"
+      COEFFS 0 1 0 0 0 1000
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD ThrottlePosition_pct_CM
+      "linear, 1 count = 1 %"
+      RAT_FUNC
+      "%3.0"
+      "%"
+      COEFFS 0 1 0 0 0 1
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD EngineState_CM
+      ""
+      TAB_VERB
+      "%1.0"
+      ""
+      COMPU_TAB_REF EngineState_TT
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD DiagErrorCode_CM
+      ""
+      TAB_VERB
+      "%2.0"
+      ""
+      COMPU_TAB_REF DiagErrorCode_TT
+    /end COMPU_METHOD
+
+    /begin COMPU_VTAB EngineState_TT
+      "Engine run state"
+      TAB_VERB
+      5
+      0 "Off"
+      1 "Cranking"
+      2 "Running"
+      3 "Idle"
+      4 "Fault"
+    /end COMPU_VTAB
+
+    /begin COMPU_VTAB DiagErrorCode_TT
+      "Active diagnostic error code"
+      TAB_VERB
+      6
+      0 "NoError"
+      1 "SensorOpenCircuit"
+      2 "SensorShortToGround"
+      3 "SensorShortToBattery"
+      4 "OutOfRange"
+      5 "CommunicationTimeout"
+    /end COMPU_VTAB
+
+    /begin GROUP SampleECU
+      "All measurements in this project"
+      ROOT
+      /begin SUB_GROUP
+        Powertrain Chassis Diagnostics
+      /end SUB_GROUP
+    /end GROUP
+
+    /begin GROUP Powertrain
+      "Engine speed, temperature, and load"
+      /begin REF_MEASUREMENT
+        EngineSpeed_rpm CoolantTemp_degC ThrottlePosition_pct EngineState
+      /end REF_MEASUREMENT
+    /end GROUP
+
+    /begin GROUP Chassis
+      "Vehicle motion measurements"
+      /begin REF_MEASUREMENT
+        VehicleSpeed_kmh LongitudinalAccel_mps2
+      /end REF_MEASUREMENT
+    /end GROUP
+
+    /begin GROUP Diagnostics
+      "Supply and fault state"
+      /begin REF_MEASUREMENT
+        BatteryVoltage_V DiagErrorCode
+      /end REF_MEASUREMENT
+    /end GROUP
+
+  /end MODULE
+/end PROJECT

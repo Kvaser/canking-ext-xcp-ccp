@@ -1,0 +1,12 @@
+{
+  "name": "xcp-sample",
+  "a2l": "a2l-daq/data/XCP/SampleECU.a2l",
+  "encoding": "latin1",
+  "protocol": "xcp",
+  "startDaq": false,
+  "signals": ["EngineSpeed_rpm", "ThrottlePosition_pct"],
+  "assignments": {
+    "10ms_Cyclic": ["EngineSpeed_rpm"],
+    "100ms_Cyclic": ["ThrottlePosition_pct"]
+  }
+}

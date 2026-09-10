@@ -1,0 +1,3 @@
+[workspace]
+resolver = "3"
+members = ["protocol-core", "a2l-daq", "canking-service"]

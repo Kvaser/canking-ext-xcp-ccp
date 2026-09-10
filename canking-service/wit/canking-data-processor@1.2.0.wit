@@ -1,0 +1,642 @@
+package canking:data-processor@1.2.0;
+
+
+/// Common types.
+interface types {
+
+  /// Meta data about an extension.
+  record extension-info {
+    /// The extension's display name.
+    display-name: string,
+    /// The extension's description.
+    description: string,
+    /// The extension's version.
+    version: string,
+    /// The extension's author.
+    author: string,
+    /// The extension's default configuration as a JSON formatted string.
+    default-config: string,
+  }
+
+  /// Supported log message severities.
+  enum log-severity {
+    /// Logs that are used for interactive investigation during development. These logs should primarily
+    /// contain information useful for debugging and have no long-term value.
+    DEBUG,
+    /// Logs that track the general flow of the application. These logs should have long-term value.
+    INFORMATION,
+    /// Logs that highlight an abnormal or unexpected event in the application flow, but do not otherwise
+    /// cause the application execution to stop.
+    WARNING,
+    /// Logs that highlight when the current flow of execution is stopped due to a failure. These should
+    /// indicate a failure in the current activity, not an application-wide failure.
+    ERROR,
+    /// Logs that describe an unrecoverable application or system crash, or a catastrophic failure that
+    /// requires immediate attention. Will trigger a message box to be displayed in CanKing.
+    CRITICAL,
+  }
+
+  /// Possible protocols that can be used by a frame.
+  enum protocol {
+    /// Unknown protocol.
+    UNKNOWN,
+    /// CAN protocol.
+    CAN,
+    /// CAN FD protocol.
+    CAN-FD,
+    /// LIN protocol.
+    LIN,
+  }
+
+  /// Error frame types.
+  enum error-frame-type {
+    /// A generic error frame.
+    GENERIC,
+    /// CRC error frame.
+    CRC-ERROR,
+    /// Bit error frame.
+    BIT-ERROR,
+    /// CAN stuff error frame.
+    STUFF-ERROR,
+    /// CAN form error frame.
+    FORM-ERROR,
+    /// CAN overrun error frame.
+    OVERRUN-ERROR,
+    /// LIN id parity error frame.
+    ID-PARITY-ERROR,
+    /// LIN synchronization error frame.
+    SYNCH-ERROR,
+  }
+
+  /// The direction of the frame.
+  enum direction {
+    /// Received frame.
+    RX,
+    /// Transmitted frame.
+    TX,
+  }
+
+  /// Reasons an acquire-entitlement request can fail.
+  @since(version = 1.2.0)
+  enum entitlement-error {
+    /// No valid license was found for the requested product.
+    NOT-LICENSED,
+    /// The host does not support entitlement checks.
+    UNSUPPORTED,
+  }
+
+  /// Special CAN information about the frame.
+  record can-frame-info {
+    /// True if the frame uses the extended 29-bit identifier.
+    is-extended-id: bool,
+    /// True if the frame is a remote transmission request (RTR) frame.
+    is-rtr: bool,
+  }
+
+  /// Special CAN FD information about the frame.
+  record can-fd-frame-info {
+    /// True if the frame uses the extended 29-bit identifier.
+    is-extended-id: bool,
+    /// True if bit rate switching (BRS) is used.
+    is-brs: bool,
+    /// True if the error state indicator (ESI) is set.
+    is-esi: bool,
+  }
+
+  /// Special LIN information about the frame.
+  record lin-frame-info {
+    /// True if the frame is a header frame (request/no data frame).
+    is-no-data: bool,
+    /// True if the frame is a wake-up frame.
+    is-wakeup: bool,
+    /// True if the frame is a start/change update frame. Use to make a slave node enter the
+    /// update frame state or to change the update data.
+    is-update: bool,
+    /// True if the frame is a clear update frame. Use to make a slave node exit the
+    /// update frame state.
+    is-clear: bool,
+  }
+
+  /// Frame data
+  record frame-data {
+    /// The frame identifier.
+    id: u32,
+    /// The length of the data payload.
+    data-len: u16,
+    /// The data payload.
+    data: list<u8>,
+  }
+
+  /// Information about the reception of a frame, such as timestamp, channel ID, and direction.
+  record frame-reception-info {
+    /// The frame timestamp in microseconds.
+    time-us: u64,
+    /// The CANlib channel number of the channel that received the frame.
+    /// This can be used to correlate the frame to a specific channel using the channel
+    /// information provided by CanKing.
+    channel-number: s32,
+    /// The direction of the frame.
+    direction: direction,
+  }
+
+  /// An unknown frame that could not be parsed by CanKing. This can be used to implement support
+  /// for custom protocols by parsing the raw frame data in the extension.
+  record unknown-process-frame {
+    /// Frame handle assigned by CanKing.
+    frame-handle: s32,
+    /// Frame reception information, for example timestamp, channel ID, and direction.
+    reception-info: frame-reception-info,
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Protocol specific flags that are not parsed by CanKing. The content of this field is protocol
+    /// dependent and should be interpreted accordingly.
+    flag-values: u32,
+  }
+
+  /// A CAN frame to be processed by the extension.
+  record can-process-frame {
+    /// Frame handle assigned by CanKing.
+    frame-handle: s32,
+    /// Frame reception information, for example timestamp, channel ID, and direction.
+    reception-info: frame-reception-info,
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Special CAN information about the frame.
+    can-info: can-frame-info,
+  }
+
+  /// A CAN FD frame to be processed by the extension.
+  record can-fd-process-frame {
+    /// Frame handle assigned by CanKing.
+    frame-handle: s32,
+    /// Frame reception information, for example timestamp, channel ID, and direction.
+    reception-info: frame-reception-info,
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Special CAN FD information about the frame.
+    can-fd-info: can-fd-frame-info,
+  }
+
+  /// A LIN frame to be processed by the extension.
+  record lin-process-frame {
+    /// Frame handle assigned by CanKing.
+    frame-handle: s32,
+    /// Frame reception information, for example timestamp, channel ID, and direction.
+    reception-info: frame-reception-info,
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Special LIN information about the frame.
+    lin-info: lin-frame-info,
+  }
+
+  /// An error frame to be processed by the extension.
+  record error-process-frame {
+    /// Frame handle assigned by CanKing.
+    frame-handle: s32,
+    /// Frame reception information, for example timestamp, channel ID, and direction.
+    reception-info: frame-reception-info,
+    /// Special error frame information.
+    error-info: error-frame-type,
+  }
+
+  /// A frame to process, which can be a regular frame with protocol specific information,
+  /// an error frame, or an unknown frame.
+  variant process-frame {
+    unknown-frame(unknown-process-frame),
+    can-frame(can-process-frame),
+    can-fd-frame(can-fd-process-frame),
+    lin-frame(lin-process-frame),
+    error-frame(error-process-frame),
+  }
+
+  /// A CAN frame to be sent out by CanKing.
+  record can-out-frame {
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Special CAN information about the frame.
+    can-info: can-frame-info,
+  }
+
+  /// A CAN FD frame to be sent out by CanKing.
+  record can-fd-out-frame {
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Special CAN FD information about the frame.
+    can-fd-info: can-fd-frame-info,
+  }
+
+  /// A LIN frame to be sent out by CanKing.
+  record lin-out-frame {
+    /// Frame data and ID.
+    frame-data: frame-data,
+    /// Special LIN information about the frame.
+    lin-info: lin-frame-info,
+  }
+
+  /// A frame to send, which can be a CAN frame, a CAN FD frame, or a LIN frame.
+  variant out-frame {
+    can-frame(can-out-frame),
+    can-fd-frame(can-fd-out-frame),
+    lin-frame(lin-out-frame),
+  }
+
+  /// A filter definition for acceptance code and mask filtering.
+  ///
+  /// Format of code and mask:
+  ///
+  /// - A binary 1 in a mask means "the corresponding bit in the code is relevant"
+  /// - A binary 0 in a mask means "the corresponding bit in the code is not relevant"
+  /// - A relevant binary 1 in a code means "the corresponding bit in the identifier must be 1"
+  /// - A relevant binary 0 in a code means "the corresponding bit in the identifier must be 0"
+  ///
+  /// In other words, the frame is accepted if ((code XOR id) AND mask) == 0.
+  record code-mask-filter {
+    /// The acceptance code.
+    code: u32,
+    /// The acceptance mask.
+    mask: u32,
+  }
+
+  /// A filter definition for frame identifiers.
+  record frame-id-filter {
+    /// The protocol accepted by the filter. Leave unset to accept all protocols.
+    protocol: option<protocol>,
+    /// True if this filter accepts extended IDs, only relevant for CAN and CAN FD protocol.
+    /// Leave unset to accept both standard and extended IDs.
+    is-extended-id: option<bool>,
+    /// The direction accepted by the filter. Leave unset to accept both directions.
+    direction: option<direction>,
+    /// A code and mask filter for the frame ID. If not set, all IDs will be accepted.
+    code-mask-filter: option<code-mask-filter>,
+  }
+
+  /// Definition of a frames subscription.
+  record frames-subscription {
+    /// True to include error frames in the subscription.
+    include-error-frames: bool,
+    /// A list of frame ID filters.
+    id-filters: list<frame-id-filter>,
+  }
+
+  /// Definition of a data subscription.
+  record data-subscription {
+    /// The frames subscription. If not set, no frames will be included in the subscription.
+    frames: option<frames-subscription>,
+    /// A list of signal handles to include in the subscription.
+    /// If not set, no signals will be included in the subscription.
+    signals: option<list<s32>>,
+  }
+
+  /// An enum value definition for a signal.
+  record enum-entry {
+    /// The enum value as a string.
+    name: string,
+    /// The enum value as a number.
+    value: f64,
+  }
+
+  /// Information about a signal.
+  record signal-info {
+    /// The signal handle.
+    signal-handle: s32,
+    /// The CANlib channel number of the signal. This can be used to correlate the signal to a
+    /// specific channel using the channel information provided by CanKing.
+    channel-number: s32,
+    /// The signal qualified name, i.e. <db-name>.<message-name>.<signal-name>.
+    qualified-name: string,
+    /// The signal name.
+    name: string,
+    /// The signal's unit.
+    unit: string,
+    /// The signal's enum value definitions, if the signal has an enum representation.
+    enum-definitions: option<list<enum-entry>>,
+  }
+
+  /// A signal's value.
+  record signal-value {
+    /// Handle to the signal.
+    signal-handle: s32,
+    /// The timestamp in microseconds.
+    time-us: u64,
+    /// The signal value.
+    value: f64,
+  }
+
+  /// Information about a channel.
+  record channel-info {
+    /// The CanKing channel name.
+    name: string,
+    /// The CanKing channel identifier.
+    id: string,
+    /// The CANlib channel number.
+    channel-number: s32,
+    /// True if this channel is silent (no frames can be sent on this channel).
+    is-silent: bool,
+    /// The protocol supported by this channel.
+    protocol: protocol,
+  }
+
+  /// Information about the CanKing setup.
+  record canking-setup-info {
+    /// All available channels.
+    channels: list<channel-info>,
+    /// All available signals, with their corresponding signal handle that will be used in the subscription and when receiving signal values.
+    signals: list<signal-info>,
+  }
+
+  /// Signal value used when setting signal values during frame processing.
+  @since(version = 1.2.0)
+  record frame-signal-value {
+    /// Name of the signal.
+    name: string,
+    /// The signal value.
+    value: f64,
+  }
+
+  /// The byte order of a signal's raw bits within a frame.
+  @since(version = 1.2.0)
+  enum byte-order {
+    /// Least significant byte first (Intel).
+    LITTLE-ENDIAN,
+    /// Most significant byte first (Motorola).
+    BIG-ENDIAN,
+  }
+
+  /// The raw data type of a signal's bits.
+  @since(version = 1.2.0)
+  enum data-type {
+    /// Unsigned integer.
+    UNSIGNED,
+    /// Signed (two's complement) integer.
+    SIGNED,
+    /// IEEE 754 single-precision floating point.
+    FLOAT,
+    /// IEEE 754 double-precision floating point.
+    DOUBLE,
+  }
+
+  /// Describes where a signal's raw bits live within a frame and how to interpret them.
+  @since(version = 1.2.0)
+  record data-layout {
+    /// The start bit of the signal within the frame.
+    start-bit: u32,
+    /// The length of the signal, in bits.
+    length: u32,
+    /// The byte order of the signal's raw bits.
+    byte-order: byte-order,
+    /// The raw data type of the signal's bits.
+    data-type: data-type,
+  }
+
+  /// Converts a signal's raw value to a physical value using a linear factor and offset,
+  /// i.e. `physical-value = raw-value * factor + offset`.
+  @since(version = 1.2.0)
+  record linear-conversion {
+    /// The factor used to convert the raw signal value to the physical value.
+    factor: f32,
+    /// The offset used to convert the raw signal value to the physical value.
+    offset: f32,
+  }
+
+  /// Converts a signal's raw value into one of a fixed set of named states.
+  @since(version = 1.2.0)
+  record state-conversion {
+    /// The enumeration values for the signal.
+    enum-definitions: list<enum-entry>,
+  }
+
+  /// How to convert a signal's raw value into a meaningful physical value.
+  @since(version = 1.2.0)
+  variant conversion-method {
+    /// A linear factor/offset conversion.
+    linear(linear-conversion),
+    /// A conversion into a fixed set of named states.
+    state(state-conversion),
+  }
+
+  /// A signal definition.
+  @since(version = 1.2.0)
+  record signal-definition {
+    /// The name of the signal.
+    name: string,
+    /// A comment for the signal.
+    comment: option<string>,
+    /// The unit of the signal.
+    unit: option<string>,
+    /// The minimum value of the signal.
+    min-value: option<f64>,
+    /// The maximum value of the signal.
+    max-value: option<f64>,
+    /// Where the signal's raw bits live within the frame and how to interpret them, if the
+    /// signal is part of the frame's raw data (as opposed to e.g. a calculated signal).
+    layout: option<data-layout>,
+    /// How to convert the signal's raw value into a meaningful physical value, if applicable.
+    conversion: option<conversion-method>,
+    /// Whether the signal is a multiplexor signal within a message.
+    is-multiplexor: option<bool>,
+    /// Name of any multiplexor that this signal depends on, if set then also set the multiplex-value to specify when this signal is present
+    multiplexor: option<string>,
+    /// The multiplex value for the signal, if it has a multiplexor.
+    multiplex-value: option<s32>,
+  }
+
+  /// A frame definition.
+  @since(version = 1.2.0)
+  record frame-definition {
+    /// The name of the frame.
+    name: string,
+    /// A comment for the frame.
+    comment: option<string>,
+    /// The frame identifier.
+    id: u32,
+    /// True if the frame uses the extended 29-bit identifier (only valid for CAN and CAN FD).
+    is-extended-id: option<bool>,
+    /// True if the frame uses the CAN FD protocol.
+    is-can-fd: option<bool>,
+    /// True if bit rate switching (BRS) is used (only valid when `is-can-fd` is true).
+    is-can-fd-with-brs: option<bool>,
+    /// The length of the frame's data payload, in bytes.
+    data-length: option<u32>,
+    /// Definitions for all signals available in this frame.
+    signals: list<signal-definition>,
+  }
+}
+
+
+/// CanKing host interface.
+interface canking {
+
+  use types.{log-severity, out-frame, frame-signal-value, entitlement-error};
+
+  /// Called by the extension to set the error message of the CanKing node.
+  /// After calling this function, the extension will be disabled until the measurement is stopped.
+  ///
+  /// error - The error message.
+  set-error: func(error: string);
+
+  /// Called by the extension to write messages to CanKing's log.
+  ///
+  /// message  - The log message.
+  /// severity - The severity.
+  log: func(message: string, severity: log-severity);
+
+  /// Called by the extension when processing an Rx, Tx or error frame to tell CanKing
+  /// that the frame shouldn't be passed to the next node in the measurement setup, the
+  /// frame should be blocked.
+  ///
+  /// frame-handle - A handle to the frame that is being processed.
+  block-frame: func(frame-handle: s32);
+
+  /// Called by the extension when processing an Rx or Tx frame to add a new
+  /// property value to the frame, a text property.
+  ///
+  /// frame-handle - A handle to the frame that is being processed.
+  /// name - The property name.
+  /// value - The property value.
+  set-frame-txt-property: func(frame-handle: s32, name: string, value: string);
+
+  /// Called by the extension when processing an Rx or Tx frame to add a new
+  /// property value to the frame, a numeric property.
+  ///
+  /// frame-handle - A handle to the frame that is being processed.
+  /// name - The property name.
+  /// value - The property value.
+  set-frame-num-property: func(frame-handle: s32, name: string, value: f64);
+
+  /// Called by the extension when processing an Rx or Tx frame to add new
+  /// signal values to the frame. A frame-definition with signal-definitions
+  /// that matches the frame and signals must have been returned by a call
+  /// to get-frame-definitions earlier.
+  ///
+  /// frame-handle - A handle to the frame that is being processed.
+  /// signal-values - The signal values.
+  @since(version = 1.2.0)
+  set-frame-signal-values: func(frame-handle: s32, signal-values: list<frame-signal-value>);
+
+  /// Called by the extension to send a CAN/LIN message to a CanKing output channel.
+  ///
+  /// channel-number - The output CANlib channel number. This can be retrieved from the channel
+  ///                  information provided by CanKing.
+  /// frame - The frame to send.
+  send-frame: func(channel-number: s32, frame: out-frame);
+
+  /// Called by the extension to queue a sequence of CAN/LIN messages to be sent out on a CanKing
+  /// output channel, with a fixed separation time between each frame.
+  ///
+  /// channel-number - The output CANlib channel number. This can be retrieved from the channel
+  ///                  information provided by CanKing.
+  /// frames - The frames to send, in order.
+  /// separation-time-ms - The time, in milliseconds, to wait between sending each subsequent frame.
+  /// first-frame-time-ms - The time, in milliseconds, to wait before sending the first frame.
+  @since(version = 1.2.0)
+  queue-out-frames: func(channel-number: s32, frames: list<out-frame>, separation-time-ms: u32, first-frame-time-ms: u32);
+
+  /// Called by a commercial extension to request access to license-gated functionality for the
+  /// extension identified by `ean`. CanKing verifies the claim against its current license
+  /// state and, on success, records a grant for this extension instance.
+  ///
+  /// A successful result does not guarantee indefinite access: CanKing may revoke the grant at
+  /// any time (for example if a license expires or is deactivated), so extensions that depend on
+  /// licensed behavior should be prepared to have a later call to this function, or a
+  /// licensed-only operation, fail even after an earlier success.
+  ///
+  /// ean - The product EAN this extension is licensed under.
+  /// version - The extension's version, matching the version reported in its extension-info.
+  /// distribution-tier - The requested license/distribution tier (e.g. "Verified", "Licensed").
+  ///                      Additional values may be introduced in the future.
+  @since(version = 1.2.0)
+  acquire-entitlement: func(ean: string, version: string, distribution-tier: string) -> result<_, entitlement-error>;
+}
+
+
+/// Interface with base functions implemented by all CanKing extension components.
+interface extension-base {
+
+  use types.{canking-setup-info, extension-info};
+
+  /// Gets the extension's information.
+  /// Returns: The extension's information.
+  get-extension-info: func() -> extension-info;
+
+  /// Called by CanKing when the configuration of the extension is changed in the measurement setup.
+  /// The extension can react to the new configuration if needed, for example by validating the configuration
+  /// and calling set-error if the configuration is invalid. This function is only called when no measurement
+  /// is running.
+  ///
+  /// new-config - The new configuration as a JSON formatted string.
+  on-config-change: func(new-config: string);
+
+  /// Called by CanKing when the setup of the measurement is changed in a way that affects the information about
+  /// the CanKing setup passed to the extensions, for example when channels or signals are added or removed.
+  /// The extension can react to the new setup information if needed, for example by updating the subscription
+  /// to include new channels or signals. This function is only called when no measurement is running.
+  ///
+  /// new-setup - The new CanKing setup information.
+  on-setup-change: func(new-setup: canking-setup-info);
+
+  /// Called by CanKing when a measurement is starting. Both on-config-change and on-setup-change will have been
+  /// called before this function, so the extension can be sure that it has the latest configuration and setup
+  /// information when this function is called.
+  /// If the extension couldn't start, then it should call set-error to set an error message to the node
+  /// in the measurement setup.
+  on-start-measurement: func();
+
+  /// Called by CanKing when a measurement is stopped.
+  on-stop-measurement: func();
+
+  /// Called by CanKing to invoke an ad-hoc command on the extension, for example triggered by a
+  /// UI action. The extension should execute the command and return a result.
+  ///
+  /// command-id - Identifier of the command to execute.
+  /// command-args - The command arguments as a JSON formatted string.
+  ///
+  /// Returns: A success payload, or an error message on failure.
+  @since(version = 1.2.0)
+  on-command: func(command-id: string, command-args: string) -> result<string, string>;
+}
+
+
+/// The CanKing data processor extension component.
+world data-processor {
+
+  import canking;
+  export extension-base;
+
+  use types.{data-subscription, process-frame, signal-value, frame-definition};
+
+  /// Called by CanKing before a measurement starts to get the data subscription.
+  /// The extension should return the data subscription it wants to use during the measurement.
+  /// If no subscription is returned, no data will be sent to the extension.
+  /// Both on-config-change and on-setup-change will have been called before this function.
+  ///
+  /// Returns: The data subscription.
+  export get-subscription: func() -> option<data-subscription>;
+
+  /// Called by CanKing when new frames have been received or transmitted and should be processed by the extension.
+  /// Only frames that are subscribed to will be passed to this function.
+  ///
+  /// frames - Frames to be processed.
+  export on-frames: func(frames: list<process-frame>);
+
+  /// Called by CanKing when new signal values have been received for any signal present in the subscription.
+  ///
+  /// signals - A list of signal values.
+  export on-signals: func(signals: list<signal-value>);
+
+  /// Called by CanKing to get information about all frame property names that this extension may add when processing frames.
+  /// This is needed for CanKing to be able to display the frame properties in the UI, e.g. in the Message Trace view.
+  /// If the extension doesn't add any frame properties, then it can return an empty list.
+  ///
+  /// Returns: A list of frame property names.
+  @since(version = 1.1.0)
+  export get-frame-property-names: func() -> list<string>;
+
+  /// Called by CanKing to get information about all frames and signals that this extension may add when processing frames.
+  /// This is needed for CanKing to be able to display the frames/signals in the UI, e.g. to be selectable in the Signal Plot view.
+  /// If the extension doesn't add any frames/signals, then it can return an empty list.
+  ///
+  /// Returns: A list of frame definitions.
+  @since(version = 1.2.0)
+  export get-frame-definitions: func() -> list<frame-definition>;
+}
+
