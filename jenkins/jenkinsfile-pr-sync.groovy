@@ -1,13 +1,16 @@
 pipeline {
     agent { label 'ubuntu' }
 
+    options {
+        skipDefaultCheckout()
+    }
+
     triggers {
         cron('H H/8 * * *')
     }
 
     environment {
         GITEA_SERVER    = 'http://git.kvaser.se'
-        GITEA_SSH_HOST  = 'git.kvaser.se'
         GITEA_OWNER     = 'kvaser'
         GITEA_REPO      = 'canking-ext-xcp-ccp'
         GITHUB_OWNER    = 'Kvaser'
@@ -18,15 +21,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                sshagent(credentials: ['c5f5ee40-6015-4aa2-9016-09836c7b378c']) {
-                    sh '''
-                        export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-                        git init -q .
-                        git remote add origin "git@${GITEA_SSH_HOST}:${GITEA_OWNER}/${GITEA_REPO}.git"
-                        git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
-                        git checkout -q -B "${BASE_BRANCH}" "origin/${BASE_BRANCH}"
-                    '''
-                }
+                checkout scm
             }
         }
 
