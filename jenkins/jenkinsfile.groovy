@@ -162,6 +162,19 @@ pipeline {
                         stash includes: 'canking-service/dist/**', name: 'dist-service'
                     }
                 }
+
+                stage ('Push to GitHub') {
+                    when { branch 'main' }
+                    steps {
+                        withCredentials([string(credentialsId: 'gh-api-token', variable: 'GH_API_TOKEN')]) {
+                            sh '''
+                                auth=$(printf "x-access-token:%s" "$GH_API_TOKEN" | base64 -w0)
+                                git -c http.extraheader="Authorization: Basic ${auth}" \
+                                  push https://github.com/Kvaser/canking-ext-xcp-ccp.git HEAD:refs/heads/main
+                            '''
+                        }
+                    }
+                }
             }
         }
     }
