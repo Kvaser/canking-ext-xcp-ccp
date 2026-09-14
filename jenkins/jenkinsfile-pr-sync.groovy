@@ -16,27 +16,17 @@ pipeline {
     }
 
     stages {
-        stage('Set up SSH auth') {
-            steps {
-                withCredentials([sshUserPrivateKey(credentialsId: 'pr-sync-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    sh '''
-                        mkdir -p ~/.ssh
-                        cp "$SSH_KEY" ~/.ssh/id_ed25519
-                        chmod 600 ~/.ssh/id_ed25519
-                        ssh-keyscan -H "${GITEA_SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
-                    '''
-                }
-            }
-        }
-
         stage('Checkout') {
             steps {
-                sh '''
-                    git init -q .
-                    git remote add origin "git@${GITEA_SSH_HOST}:${GITEA_OWNER}/${GITEA_REPO}.git"
-                    git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
-                    git checkout -q -B "${BASE_BRANCH}" "origin/${BASE_BRANCH}"
-                '''
+                sshagent(credentials: ['c5f5ee40-6015-4aa2-9016-09836c7b378c']) {
+                    sh '''
+                        export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+                        git init -q .
+                        git remote add origin "git@${GITEA_SSH_HOST}:${GITEA_OWNER}/${GITEA_REPO}.git"
+                        git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
+                        git checkout -q -B "${BASE_BRANCH}" "origin/${BASE_BRANCH}"
+                    '''
+                }
             }
         }
 
@@ -55,11 +45,16 @@ pipeline {
 
         stage('Sync PRs into Gitea') {
             steps {
-                withCredentials([
-                    string(credentialsId: 'pr-sync-token', variable: 'GITEA_TOKEN'),
-                    string(credentialsId: 'gh-api-token', variable: 'GITHUB_TOKEN')
-                ]) {
-                    sh 'python3 jenkins/scripts/sync_github_prs.py'
+                sshagent(credentials: ['c5f5ee40-6015-4aa2-9016-09836c7b378c']) {
+                    withCredentials([
+                        usernamePassword(credentialsId: 'a4839288-ee26-4f21-9dd7-7de833c3d345', usernameVariable: 'GITEA_USER', passwordVariable: 'GITEA_TOKEN'),
+                        string(credentialsId: 'gh-api-token', variable: 'GITHUB_TOKEN')
+                    ]) {
+                        sh '''
+                            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
+                            python3 jenkins/scripts/sync_github_prs.py
+                        '''
+                    }
                 }
             }
         }
