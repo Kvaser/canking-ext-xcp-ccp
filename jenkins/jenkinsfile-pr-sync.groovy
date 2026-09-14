@@ -30,9 +30,9 @@ pipeline {
                 withCredentials([string(credentialsId: 'gh-api-token', variable: 'GH_API_TOKEN')]) {
                     sh '''
                         auth=$(printf "x-access-token:%s" "$GH_API_TOKEN" | base64 -w0)
-                        git remote add github "https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git"
                         git -c http.extraheader="Authorization: Basic ${auth}" \
-                          fetch github "+refs/pull/*/head:refs/remotes/github/pr/*" --prune
+                          fetch "https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git" \
+                          "+refs/pull/*/head:refs/remotes/github/pr/*" --prune
                     '''
                 }
             }
