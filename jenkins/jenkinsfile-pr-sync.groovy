@@ -42,7 +42,7 @@ pipeline {
             steps {
                 sshagent(credentials: ['c5f5ee40-6015-4aa2-9016-09836c7b378c']) {
                     withCredentials([
-                        usernamePassword(credentialsId: 'a4839288-ee26-4f21-9dd7-7de833c3d345', usernameVariable: 'GITEA_USER', passwordVariable: 'GITEA_TOKEN'),
+                        usernamePassword(credentialsId: 'b041a79d-d7ae-4d9a-b199-e317ac8b228d', usernameVariable: 'GITEA_USER', passwordVariable: 'GITEA_TOKEN'),
                         string(credentialsId: 'gh-api-token', variable: 'GITHUB_TOKEN')
                     ]) {
                         sh '''
