@@ -5,6 +5,7 @@ For every open PR on the upstream GitHub repo:
   1. Push its head commit into this Gitea repo as branch ``gh-pr-<number>``
   2. Open a Gitea pull request for that branch, unless one already exists
 """
+import base64
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ import urllib.request
 GITEA_SERVER = os.environ["GITEA_SERVER"].rstrip("/")
 GITEA_OWNER = os.environ["GITEA_OWNER"]
 GITEA_REPO = os.environ["GITEA_REPO"]
+GITEA_USER = os.environ["GITEA_USER"]
 GITEA_TOKEN = os.environ["GITEA_TOKEN"]
 GITHUB_OWNER = os.environ["GITHUB_OWNER"]
 GITHUB_REPO = os.environ["GITHUB_REPO"]
@@ -23,9 +25,12 @@ BASE_BRANCH = os.environ.get("BASE_BRANCH", "main")
 BRANCH_PREFIX = "gh-pr-"
 
 
-def http_json(url, token=None, method="GET", data=None):
+def http_json(url, token=None, basic_auth=None, method="GET", data=None):
     headers = {"Accept": "application/json"}
-    if token:
+    if basic_auth:
+        creds = base64.b64encode(f"{basic_auth[0]}:{basic_auth[1]}".encode()).decode()
+        headers["Authorization"] = f"Basic {creds}"
+    elif token:
         headers["Authorization"] = f"token {token}"
     body = None
     if data is not None:
@@ -65,7 +70,7 @@ def gitea_open_prs():
             f"{GITEA_SERVER}/api/v1/repos/{GITEA_OWNER}/{GITEA_REPO}/pulls"
             f"?state=open&limit=50&page={page}"
         )
-        chunk = http_json(url, token=GITEA_TOKEN)
+        chunk = http_json(url, basic_auth=(GITEA_USER, GITEA_TOKEN))
         if not chunk:
             break
         prs.extend(chunk)
@@ -106,7 +111,7 @@ def main():
         pr_body = f"Mirrors {html_url} by @{author}.\n\n---\n\n{body}".strip()
         created = http_json(
             f"{GITEA_SERVER}/api/v1/repos/{GITEA_OWNER}/{GITEA_REPO}/pulls",
-            token=GITEA_TOKEN,
+            basic_auth=(GITEA_USER, GITEA_TOKEN),
             method="POST",
             data={
                 "head": branch,
@@ -129,7 +134,7 @@ def main():
         if number in closed_numbers:
             http_json(
                 f"{GITEA_SERVER}/api/v1/repos/{GITEA_OWNER}/{GITEA_REPO}/pulls/{gitea_pr['number']}",
-                token=GITEA_TOKEN,
+                basic_auth=(GITEA_USER, GITEA_TOKEN),
                 method="PATCH",
                 data={"state": "closed"},
             )
