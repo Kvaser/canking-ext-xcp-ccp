@@ -162,7 +162,7 @@ pipeline {
                         stash includes: 'canking-service/dist/**', name: 'dist-service'
                     }
                 }
-
+                /*
                 stage ('Push to GitHub') {
                     when { branch 'main' }
                     steps {
@@ -174,7 +174,7 @@ pipeline {
                             '''
                         }
                     }
-                }
+                }*/
             }
         }
     }
