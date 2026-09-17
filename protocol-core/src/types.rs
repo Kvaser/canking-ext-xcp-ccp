@@ -275,6 +275,8 @@ pub struct CcpInfo {
     pub station_address: u16,
     pub baudrate: Option<u32>,
     pub bytes_only: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub seed_key_dll: Option<String>,
 }
 
 /// CCP DAQ source: one `/begin SOURCE` block in the A2L file, which may contain one or more rasters.

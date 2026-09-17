@@ -168,6 +168,7 @@ pub struct Command {
     pub bytes: Vec<u8>,
     pub label: String,
     pub response: ExpectedResponse,
+    pub optional: bool,
 }
 
 /// Bytes a frame must carry to match, as `(index, value)` pairs.

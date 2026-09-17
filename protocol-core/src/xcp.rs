@@ -7,7 +7,7 @@
 //!
 //! | Phase | Commands | Expected response |
 //! |-------|----------|-------------------|
-//! | `Connect` | CONNECT, GET_STATUS | ack |
+//! | `Connect` | CONNECT, GET_STATUS, GET_SEED + UNLOCK (optional, resource=DAQ) | ack |
 //! | `Prepare` | START_STOP_SYNCH (stop all), then static: CLEAR_DAQ_LIST per list / dynamic: FREE_DAQ, ALLOC_DAQ, ALLOC_ODT xN, ALLOC_ODT_ENTRY xN, then SET_DAQ_ID per list with a user-assigned dynamic CAN id | ack |
 //! | `WriteEntries` | per ODT: SET_DAQ_PTR (entry 0), WRITE_DAQ x entries | ack |
 //! | `SetMode` | SET_DAQ_LIST_MODE per list | ack |
@@ -24,6 +24,8 @@
 //! - SET_DAQ_ID (transport-layer command `0xF2`, sub-command `0xFD`) is only sent for a list whose `CanIdSource::Dynamic` has a
 //!   user-assigned id; everything else (no override, a `FIXED` A2L id, or a `Dynamic` list left on its fallback) keeps transmitting
 //!   on the transport's shared default id, unchanged.
+//! - GET_SEED/UNLOCK are marked optional: many ecu:s don't implement them at all, and a development ECU with no real security algorithm typically accepts any key,
+//!  so UNLOCK is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built
 
 use crate::types::{A2lProject, ByteOrder, DaqList, DaqListDef, EventEntry};
 
@@ -117,18 +119,49 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
 
 /// Push a command to the sequence with an ACK response.
 fn push(cmds: &mut Vec<XcpCommand>, phase: XcpPhase, bytes: Vec<u8>, label: String) {
+    push_full(cmds, phase, bytes, label, false);
+}
+
+/// Push a command that might not be supported
+fn push_optional(cmds: &mut Vec<XcpCommand>, phase: XcpPhase, bytes: Vec<u8>, label: String) {
+    push_full(cmds, phase, bytes, label, true);
+}
+
+fn push_full(
+    cmds: &mut Vec<XcpCommand>,
+    phase: XcpPhase,
+    bytes: Vec<u8>,
+    label: String,
+    optional: bool,
+) {
     cmds.push(XcpCommand {
         phase,
         bytes,
         label,
         response: XcpResponse::Ack,
+        optional,
     });
 }
+
+/// Resource bit for GET_SEED/UNLOCK: the DAQ resource this pipeline drives.
+const RESOURCE_DAQ: u8 = 0x04;
 
 /// Phase builders
 fn phase_connect(cmds: &mut Vec<XcpCommand>) {
     push(cmds, XcpPhase::Connect, vec![0xFF, 0x00], "CONNECT".into());
     push(cmds, XcpPhase::Connect, vec![0xFD], "GET_STATUS".into());
+    push_optional(
+        cmds,
+        XcpPhase::Connect,
+        vec![0xF8, 0x00, RESOURCE_DAQ],
+        "GET_SEED  resource=DAQ".into(),
+    );
+    push_optional(
+        cmds,
+        XcpPhase::Connect,
+        vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0],
+        "UNLOCK  key=zeros (dev placeholder; swap in a real seed-key algorithm here)".into(),
+    );
 }
 
 /// Build the preparation sequence for a new DAQ session.
@@ -292,6 +325,7 @@ fn phase_start(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
             bytes: vec![0xDE, 0x02, id[0], id[1]],
             label: format!("START_STOP_DAQ_LIST  select daq={}", wire),
             response: XcpResponse::FirstPid { daq_index: idx },
+            optional: false,
         });
     }
     push(
@@ -578,6 +612,29 @@ mod tests {
         assert_eq!(&id_be[2..4], &[0x01, 0x02], "big-endian list index");
         assert_eq!(&id_le[4..8], &ASSIGNED_CAN_ID.to_le_bytes());
         assert_eq!(&id_be[4..8], &ASSIGNED_CAN_ID.to_be_bytes());
+    }
+
+    #[test]
+    fn get_seed_and_unlock_are_optional_connect_phase_commands() {
+        let p = project(DaqMode::Dynamic, vec![], 0);
+        let cmds = build_init_commands(&p, &one_daq_list(0));
+
+        let get_seed = cmds.iter().find(|c| c.bytes[0] == 0xF8).unwrap();
+        assert_eq!(get_seed.phase, XcpPhase::Connect);
+        assert_eq!(get_seed.bytes, vec![0xF8, 0x00, 0x04], "mode=start, resource=DAQ");
+        assert!(get_seed.optional, "GET_SEED must not abort init if unsupported");
+
+        let unlock = cmds.iter().find(|c| c.bytes[0] == 0xF7).unwrap();
+        assert_eq!(unlock.phase, XcpPhase::Connect);
+        assert_eq!(unlock.bytes, vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0], "6-byte zero key");
+        assert!(unlock.optional, "UNLOCK must not abort init if unsupported");
+
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| !matches!(c.bytes[0], 0xF7 | 0xF8) && c.optional),
+            "every other command stays mandatory"
+        );
     }
 
     #[test]

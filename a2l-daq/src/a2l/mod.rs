@@ -399,6 +399,35 @@ mod tests {
     }
 
     #[test]
+    fn seed_key_dll_is_captured_regardless_of_block_order() {
+        let after_tp_blob = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+        /begin SEED_KEY "SeedNKeyXcp.dll" /end SEED_KEY
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(after_tp_blob, &[]).unwrap().ccp_data.expect("ccp_data");
+        assert_eq!(ccp.info.seed_key_dll.as_deref(), Some("SeedNKeyXcp.dll"));
+
+        let before_tp_blob = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin SEED_KEY "SeedNKeyXcp.dll" /end SEED_KEY
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(before_tp_blob, &[]).unwrap().ccp_data.expect("ccp_data");
+        assert_eq!(ccp.info.seed_key_dll.as_deref(), Some("SeedNKeyXcp.dll"));
+
+        let content = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(content, &[]).unwrap().ccp_data.expect("ccp_data");
+        assert_eq!(ccp.info.seed_key_dll, None, "no SEED_KEY block declared");
+    }
+
+    #[test]
     fn parses_ccp_source_blocks() {
         let content = r#"
       /begin IF_DATA ASAP1B_CCP

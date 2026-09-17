@@ -11,6 +11,14 @@ pub(super) fn cmd(bytes: Vec<u8>, label: &str) -> Command {
         bytes,
         label: label.into(),
         response: ExpectedResponse::Ack,
+        optional: false,
+    }
+}
+
+pub(super) fn optional_cmd(bytes: Vec<u8>, label: &str) -> Command {
+    Command {
+        optional: true,
+        ..cmd(bytes, label)
     }
 }
 
@@ -20,6 +28,7 @@ pub(super) fn stop_cmd(bytes: Vec<u8>, label: &str) -> Command {
         bytes,
         label: label.into(),
         response: ExpectedResponse::Ack,
+        optional: false,
     }
 }
 

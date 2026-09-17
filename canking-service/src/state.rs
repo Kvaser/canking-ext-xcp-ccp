@@ -19,6 +19,8 @@ pub(crate) struct CommandFrame {
     pub(crate) is_extended_id: bool,
     pub(crate) response: ExpectedResponse,
     pub(crate) label: String,
+    /// Whether an unsupported/negative response to this command is expected and tolerated.
+    pub(crate) optional: bool,
 }
 
 /// Everything derived from the current config, plus the progress of the measurement currently running.
@@ -168,6 +170,14 @@ impl State {
         }
     }
 
+    /// Whether the init command `data` answers is marked optional
+    /// meaning an error response to it is expected and should not be logged as a failure.
+    pub(crate) fn pending_command_is_optional(&self, data: &[u8]) -> bool {
+        self.answered_command(data)
+            .and_then(|i| self.init_frames.get(i))
+            .is_some_and(|f| f.optional)
+    }
+
     /// Command frames as host out-frames, CAN or CAN FD depending on the A2L transport.
     fn out_frames(&self, frames: &[CommandFrame]) -> Vec<OutFrame> {
         frames
@@ -225,7 +235,27 @@ mod tests {
             is_extended_id: false,
             response: ExpectedResponse::Ack,
             label: "test".to_string(),
+            optional: false,
         }
+    }
+
+    #[test]
+    fn pending_command_is_optional_reflects_the_matched_frame() {
+        let mut state = State::default();
+        state.init_frames = vec![
+            CommandFrame {
+                optional: false,
+                ..command_frame()
+            },
+            CommandFrame {
+                optional: true,
+                ..command_frame()
+            },
+        ];
+
+        assert!(!state.pending_command_is_optional(&[0xFE]), "first command is mandatory");
+        state.record_answer(0);
+        assert!(state.pending_command_is_optional(&[0xFE]), "second command is optional");
     }
 
     #[test]

@@ -10,6 +10,8 @@
 //! |-------|---------|-----------------------|----------|
 //! | `Connect` | `CONNECT 0x01` | `01 ctr sa_lo sa_hi` | ack |
 //! | `Connect` | `GET_CCP_VERSION 0x1B` | `1B ctr 02 01` | ack |
+//! | `Connect` | `GET_SEED 0x12` (optional) | `12 ctr resource 00 00 00 00 00` | ack |
+//! | `Connect` | `UNLOCK 0x13` (optional) | `13 ctr key[6]` | ack |
 //! | `Prepare` | `START_STOP_ALL 0x08` (stop) | `08 ctr 00` | ack |
 //! | `Prepare` | `GET_DAQ_SIZE 0x14` (per list) | `14 ctr daq 00 <dto-can-id[4]>` | first PID (CRM byte 4) |
 //! | `WriteEntries` | `SET_DAQ_PTR 0x15` (per element) | `15 ctr daq odt element` | ack |
@@ -27,6 +29,8 @@
 //! - CCP 2.1 does not require the slave to post-increment its ODT-element pointer, so every element gets its own `SET_DAQ_PTR`
 //!   before its `WRITE_DAQ`. When the slave declares `BYTES_ONLY`, each multi-byte signal is registered as consecutive 1-byte `WRITE_DAQ`s
 //! - `GET_DAQ_SIZE` both clears the DAQ list and reports its size and first PID which the first PID is carried back in CRM byte 4.
+//! - `GET_SEED`/`UNLOCK` are marked optional not every slave implements them, and a development ECU with no real security algorithm typically accepts any key, 
+//! so `UNLOCK` is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built.
 //!
 //! Address extension is emitted as 0 for now
 
@@ -46,11 +50,16 @@ const START_STOP_ALL: u8 = 0x08;
 const GET_DAQ_SIZE: u8 = 0x14;
 const SET_DAQ_PTR: u8 = 0x15;
 const WRITE_DAQ: u8 = 0x16;
+const GET_SEED: u8 = 0x12;
+const UNLOCK: u8 = 0x13;
 
 // START_STOP / START_STOP_ALL modes.
 const MODE_STOP: u8 = 0x00;
 const MODE_START: u8 = 0x01;
 const MODE_PREPARE: u8 = 0x02;
+
+/// Resource bit for GET_SEED/UNLOCK: the DAQ resource this pipeline drives.
+const RESOURCE_DAQ: u8 = 0x02;
 
 /// Snapshot of everything the phase builders need from the parsed project.
 struct Ctx<'a> {
@@ -77,7 +86,7 @@ impl Seq {
 
     /// Push a command expecting a plain positive response.
     fn push(&mut self, phase: CcpPhase, cmd: u8, data: &[u8], label: String) {
-        self.push_resp(phase, cmd, data, label, CcpResponse::Ack);
+        self.push_full(phase, cmd, data, label, CcpResponse::Ack, false);
     }
 
     /// Push a command, tagging the response it carries.
@@ -89,6 +98,22 @@ impl Seq {
         label: String,
         response: CcpResponse,
     ) {
+        self.push_full(phase, cmd, data, label, response, false);
+    }
+
+    fn push_optional(&mut self, phase: CcpPhase, cmd: u8, data: &[u8], label: String) {
+        self.push_full(phase, cmd, data, label, CcpResponse::Ack, true);
+    }
+
+    fn push_full(
+        &mut self,
+        phase: CcpPhase,
+        cmd: u8,
+        data: &[u8],
+        label: String,
+        response: CcpResponse,
+        optional: bool,
+    ) {
         let mut bytes = Vec::with_capacity(2 + data.len());
         bytes.push(cmd);
         bytes.push(self.ctr);
@@ -99,6 +124,7 @@ impl Seq {
             bytes,
             label,
             response,
+            optional,
         });
     }
 }
@@ -167,6 +193,18 @@ fn phase_connect(seq: &mut Seq, ctx: &Ctx) {
         GET_CCP_VERSION,
         &[0x02, 0x01],
         "GET_CCP_VERSION  2.1".into(),
+    );
+    seq.push_optional(
+        CcpPhase::Connect,
+        GET_SEED,
+        &[RESOURCE_DAQ, 0, 0, 0, 0, 0],
+        "GET_SEED  resource=DAQ".into(),
+    );
+    seq.push_optional(
+        CcpPhase::Connect,
+        UNLOCK,
+        &[0, 0, 0, 0, 0, 0],
+        "UNLOCK  key=zeros (dev placeholder; swap in a real seed-key algorithm here)".into(),
     );
 }
 
@@ -371,6 +409,28 @@ mod tests {
         let cmds = build_init_commands(&project(true), &one_daq_list());
         let connect = find(&cmds, CONNECT);
         assert_eq!(connect.bytes, vec![CONNECT, 0x00, 0x00, 0x01], "0x0100 LE");
+    }
+
+    #[test]
+    fn get_seed_and_unlock_are_optional_connect_phase_commands() {
+        let cmds = build_init_commands(&project(false), &one_daq_list());
+
+        let get_seed = find(&cmds, GET_SEED);
+        assert_eq!(get_seed.phase, CcpPhase::Connect);
+        assert_eq!(&get_seed.bytes[2..], &[0x02, 0, 0, 0, 0, 0], "resource=DAQ");
+        assert!(get_seed.optional, "GET_SEED must not abort init if unsupported");
+
+        let unlock = find(&cmds, UNLOCK);
+        assert_eq!(unlock.phase, CcpPhase::Connect);
+        assert_eq!(&unlock.bytes[2..], &[0, 0, 0, 0, 0, 0], "6-byte zero key");
+        assert!(unlock.optional, "UNLOCK must not abort init if unsupported");
+
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| !matches!(c.bytes[0], GET_SEED | UNLOCK) && c.optional),
+            "every other command stays mandatory"
+        );
     }
 
     #[test]

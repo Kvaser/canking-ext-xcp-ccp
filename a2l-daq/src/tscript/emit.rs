@@ -174,6 +174,16 @@ fn daq_functions_block(config: &TScriptConfig, init: &DaqInit) -> String {
     out.push_str("    }\n");
     out.push_str("}\n\n");
 
+    // Which init states may get an unsupported/negative response without aborting the sequence.
+    if init.commands.iter().any(|c| c.optional) {
+        out.push_str("int isOptionalState(int state) {\n");
+        for (i, cmd) in init.commands.iter().enumerate().filter(|(_, c)| c.optional) {
+            let _ = writeln!(out, "    if (state == {i}) {{ return 1; }}  /* {} */", cmd.label);
+        }
+        out.push_str("    return 0;\n");
+        out.push_str("}\n\n");
+    }
+
     // Single definition of the teardown sequence. The bytes are the protocol's own DISCONNECT/stop commands
     if !init.stop_commands.is_empty() {
         out.push_str("void sendDaqStop(int id) {\n");
@@ -257,6 +267,38 @@ fn signal_hook_block(config: &TScriptConfig) -> String {
     out
 }
 
+fn advance_state_lines(indent: &str, protocol_name: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{indent}timerCancel(daqTimeout);");
+    let _ = writeln!(out, "{indent}init_state++;");
+    let _ = writeln!(out, "{indent}count = 0;");
+    let _ = writeln!(out, "{indent}if (init_state < INIT_STATES) {{");
+    let _ = writeln!(out, "{indent}    sendDaqCommand(init_state, master_id);");
+    let _ = writeln!(out, "{indent}    timerStart(daqTimeout);");
+    let _ = writeln!(out, "{indent}}} else {{");
+    let _ = writeln!(out, "{indent}    printf(\"{protocol_name} init complete\\n\");");
+    let _ = writeln!(out, "{indent}}}");
+    out
+}
+
+fn fatal_error_lines(
+    indent: &str,
+    protocol_name: &str,
+    error_code_byte: usize,
+    has_stop: bool,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{indent}printf(\"{protocol_name} error at state %d: 0x%02x\\n\", init_state, this.data[{error_code_byte}]);"
+    );
+    let _ = writeln!(out, "{indent}timerCancel(daqTimeout);");
+    if has_stop {
+        let _ = writeln!(out, "{indent}sendDaqStop(master_id);");
+    }
+    out
+}
+
 /// One `on CanMessage(Fd)<*>` block
 fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
     let mut out = String::new();
@@ -278,25 +320,35 @@ fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
         let init = config.daq_init.as_ref().expect("has_init implies daq_init");
         let format = init.protocol.response_format();
         let name = init.protocol.name();
+        let has_optional = init.commands.iter().any(|c| c.optional);
+        let has_stop = !init.stop_commands.is_empty();
+
         let _ = writeln!(out, "    if ({}) {{", frame_condition(format.positive));
-        out.push_str("        timerCancel(daqTimeout);\n");
-        out.push_str("        init_state++;\n");
-        out.push_str("        count = 0;\n");
-        out.push_str("        if (init_state < INIT_STATES) {\n");
-        out.push_str("            sendDaqCommand(init_state, master_id);\n");
-        out.push_str("            timerStart(daqTimeout);\n");
-        out.push_str("        } else {\n");
-        let _ = writeln!(out, "            printf(\"{} init complete\\n\");", name);
-        out.push_str("        }\n");
+        out.push_str(&advance_state_lines("        ", name));
         let _ = writeln!(out, "    }} else if ({}) {{", frame_condition(format.error));
-        let _ = writeln!(
-            out,
-            "        printf(\"{} error at state %d: 0x%02x\\n\", init_state, this.data[{}]);",
-            name, format.error_code_byte
-        );
-        out.push_str("        timerCancel(daqTimeout);\n");
-        if !init.stop_commands.is_empty() {
-            out.push_str("        sendDaqStop(master_id);\n");
+        if has_optional {
+            out.push_str("        if (isOptionalState(init_state)) {\n");
+            let _ = writeln!(
+                out,
+                "            printf(\"{name} optional command not supported at state %d (0x%02x), continuing\\n\", init_state, this.data[{}]);",
+                format.error_code_byte
+            );
+            out.push_str(&advance_state_lines("            ", name));
+            out.push_str("        } else {\n");
+            out.push_str(&fatal_error_lines(
+                "            ",
+                name,
+                format.error_code_byte,
+                has_stop,
+            ));
+            out.push_str("        }\n");
+        } else {
+            out.push_str(&fatal_error_lines(
+                "        ",
+                name,
+                format.error_code_byte,
+                has_stop,
+            ));
         }
         out.push_str("    }\n");
     }
@@ -792,6 +844,55 @@ mod tests {
             t.contains("} else if (this.data[0] == 0xFE) {"),
             "got:\n{t}"
         );
+    }
+
+    #[test]
+    fn optional_command_error_advances_instead_of_aborting() {
+        let t = generate_tscript(&init_config(
+            Protocol::Xcp,
+            vec![
+                cmd(vec![0xFF, 0x00], "CONNECT"),
+                optional_cmd(vec![0xF8, 0x00, 0x04], "GET_SEED"),
+            ],
+            vec![stop_cmd(vec![0xFE], "DISCONNECT")],
+        ));
+
+        assert!(
+            t.contains("int isOptionalState(int state) {"),
+            "got:\n{t}"
+        );
+        assert!(
+            t.contains("if (state == 1) { return 1; }  /* GET_SEED */"),
+            "got:\n{t}"
+        );
+        assert!(
+            t.contains("if (isOptionalState(init_state)) {"),
+            "got:\n{t}"
+        );
+        assert!(
+            t.contains("optional command not supported at state %d"),
+            "got:\n{t}"
+        );
+        let optional_branch = t
+            .split("if (isOptionalState(init_state)) {")
+            .nth(1)
+            .unwrap()
+            .split("} else {")
+            .next()
+            .unwrap();
+        assert!(optional_branch.contains("init_state++;"), "got:\n{t}");
+        assert!(!optional_branch.contains("sendDaqStop"), "got:\n{t}");
+        assert_eq!(t.matches("sendDaqStop(master_id);").count(), 3, "got:\n{t}");
+    }
+
+    #[test]
+    fn no_optional_state_helper_when_nothing_is_optional() {
+        let t = generate_tscript(&init_config(
+            Protocol::Xcp,
+            vec![cmd(vec![0xFF, 0x00], "CONNECT")],
+            vec![stop_cmd(vec![0xFE], "DISCONNECT")],
+        ));
+        assert!(!t.contains("isOptionalState"), "got:\n{t}");
     }
 
     #[test]

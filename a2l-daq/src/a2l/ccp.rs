@@ -58,8 +58,14 @@ fn parse_ccp_contents(tokens: &[String]) -> CcpData {
                         sources.push(s);
                     }
                 }
-                "TP_BLOB" => info = parse_tp_blob(block),
-                _ => {} // EVENT_GROUP, SEED_KEY, CHECKSUM
+                "TP_BLOB" => {
+                    // Preserve a SEED_KEY parsed before TP_BLOB was reached; block order isn't guaranteed.
+                    let seed_key_dll = info.seed_key_dll.take();
+                    info = parse_tp_blob(block);
+                    info.seed_key_dll = seed_key_dll;
+                }
+                "SEED_KEY" => info.seed_key_dll = parse_seed_key(block),
+                _ => {} // EVENT_GROUP, CHECKSUM
             }
         } else {
             i += 1;
@@ -71,6 +77,14 @@ fn parse_ccp_contents(tokens: &[String]) -> CcpData {
         rasters,
         sources,
     }
+}
+
+/// Parses a `/begin SEED_KEY "<dll name>" /end SEED_KEY` block.
+fn parse_seed_key(tokens: &[String]) -> Option<String> {
+    tokens
+        .first()
+        .filter(|t| t.starts_with('"'))
+        .map(|t| t.trim_matches('"').to_string())
 }
 
 /// Parses a `/begin RASTER` block into an [`EventEntry`].
@@ -205,5 +219,6 @@ fn parse_tp_blob(tokens: &[String]) -> CcpInfo {
         station_address,
         baudrate,
         bytes_only,
+        seed_key_dll: None,
     }
 }

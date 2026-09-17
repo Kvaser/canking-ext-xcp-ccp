@@ -288,10 +288,21 @@ impl bindings::Guest for DaqComponent {
 
             match protocol::classify_response(proto, data) {
                 ResponseType::Error { code } => {
-                    log(
-                        &format!("{} error response: 0x{code:02X}", proto.name()),
-                        LogSeverity::Warning,
-                    );
+                    let optional = STATE.read().unwrap().pending_command_is_optional(data);
+                    if optional {
+                        log(
+                            &format!(
+                                "{} error response: 0x{code:02X} (optional command, not supported by this ECU)",
+                                proto.name()
+                            ),
+                            LogSeverity::Debug,
+                        );
+                    } else {
+                        log(
+                            &format!("{} error response: 0x{code:02X}", proto.name()),
+                            LogSeverity::Warning,
+                        );
+                    }
                     consume_response(data, false);
                     saw_command_response = true;
                     continue;

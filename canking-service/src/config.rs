@@ -100,6 +100,7 @@ fn command_frames(id: u32, cmds: Vec<protocol::Command>) -> Vec<CommandFrame> {
             is_extended_id: id > 0x7FF,
             response: cmd.response,
             label: cmd.label,
+            optional: cmd.optional,
         })
         .collect()
 }
