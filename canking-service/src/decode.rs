@@ -28,6 +28,16 @@ pub(crate) struct SignalLayout {
 }
 
 impl SignalLayout {
+    /// Frame bit (`byte * 8 + bit`) of the value's least significant bit, which is what CanKing expects as
+    /// `start-bit` for both byte orders. Big-endian values keep their LSB in the last byte.
+    fn lsb_start_bit(&self) -> u32 {
+        if self.big_endian {
+            (self.start_byte as u32 + self.size as u32 - 1 - self.shift / 8) * 8 + self.shift % 8
+        } else {
+            self.start_byte as u32 * 8 + self.shift
+        }
+    }
+
     /// A layout for a raw pass-through value: unscaled, unsigned, little-endian, unmasked.
     fn raw(name: Arc<str>, pid: u8, start_byte: usize, size: usize) -> Self {
         SignalLayout {
@@ -245,7 +255,7 @@ impl Decoder {
                 let name = l.name.to_string();
                 let sig = resolve_signal(&signal_map, &name);
                 let bit_layout = LayoutMeta {
-                    start_bit: l.start_byte as u32 * 8 + l.shift,
+                    start_bit: l.lsb_start_bit(),
                     length: l.bit_length,
                     big_endian: l.big_endian,
                     is_signed: l.is_signed,
@@ -869,6 +879,36 @@ mod tests {
         assert_eq!(
             m.layout.start_bit, 8,
             "no shift: the mask covers the whole span"
+        );
+    }
+
+    #[test]
+    fn start_bit_is_the_lsb_for_both_byte_orders() {
+        let at = |start_byte, size, big_endian, shift| SignalLayout {
+            big_endian,
+            shift,
+            ..SignalLayout::raw(Arc::from("x"), 0, start_byte, size)
+        };
+        assert_eq!(at(1, 2, false, 0).lsb_start_bit(), 8);
+        assert_eq!(
+            at(1, 4, true, 0).lsb_start_bit(),
+            32,
+            "4-byte BE in bytes 1-4: LSB is byte 4 bit 0"
+        );
+        assert_eq!(
+            at(5, 2, true, 0).lsb_start_bit(),
+            48,
+            "2-byte BE in bytes 5-6: LSB is byte 6 bit 0"
+        );
+        assert_eq!(
+            at(1, 2, true, 4).lsb_start_bit(),
+            20,
+            "masked BE, shift 4: byte 2 bit 4"
+        );
+        assert_eq!(
+            at(1, 2, true, 12).lsb_start_bit(),
+            12,
+            "masked BE, shift 12: byte 1 bit 4"
         );
     }
 
