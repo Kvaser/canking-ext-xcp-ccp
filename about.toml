@@ -1,0 +1,9 @@
+# cargo-about config: THIRD_PARTY_LICENSES.html for the shipped wasm components (see run.sh stage).
+accepted = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib"]
+targets = ["wasm32-wasip2"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Skip our own workspace crates (publish = false)
+[private]
+ignore = true

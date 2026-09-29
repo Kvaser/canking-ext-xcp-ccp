@@ -1,11 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import thirdPartyLicenses from "./third-party-licenses";
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), thirdPartyLicenses("third-party-npm.json")],
+  plugins: [react()],
   build: {
+    // Licenses of all bundled npm dependencies, shipped inside the package (dist/)
+    license: { fileName: "THIRD_PARTY_LICENSES.md" },
     rolldownOptions: {
       output: {
         codeSplitting: {

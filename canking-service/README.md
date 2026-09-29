@@ -93,7 +93,7 @@ Package the component into an installable `.ckext` from the repo root:
 # -> canking-service/dist/daq_decoder-<version>.ckext
 ```
 
-(`wasm` runs the `cargo build ... --target wasm32-wasip2` above; `stage` and `pack` bundle it with its `ck-ext-info.json` and license notices.
+(`wasm` runs the `cargo build ... --target wasm32-wasip2` above; `stage` and `pack` bundle it with its `ck-ext-info.json` and `license.txt`.
 Those two groups also handle the GUI bundle; its steps report a failure if no GUI `.tgz` was built, which does not affect the service `.ckext`.)
 
 Installed CanKing extensions live in `C:\ProgramData\Kvaser\CanKing\extensions`.

@@ -11,8 +11,8 @@
 #            + a2l-daq-cli release build
 #   wasm     wasm32-wasip2 component builds (a2l-daq, daq-decoder)
 #   gui      canking-gui: npm install, jco transpile, typecheck + vite build, npm pack (.tgz)
-#   stage    generate license.txt + THIRD_PARTY_LICENSES.html, then stage the raw .tgz/.wasm,
-#            those notices and ck-ext-info.json into canking-gui/dist and canking-service/dist,
+#   stage    generate license.txt + THIRD_PARTY_LICENSES.html (cargo-about), then stage the raw
+#            .tgz/.wasm, license/doc files and ck-ext-info.json into canking-gui/dist and canking-service/dist,
 #            ready to be signed. Needs `gui` and `wasm` (daq-decoder) run first.
 #   pack     package the staged bundles into .ckext files. Needs `stage` run first;
 #            picks up dist/bundle.p7s if a signing step dropped one in there.
@@ -56,29 +56,31 @@ write_license() {
     { printf 'Software Product: %s\n\n\n' "$2"; cat LICENSE; } > "$1"
 }
 
-# Write license.txt (the project LICENSE) and THIRD_PARTY_LICENSES.html into canking-gui/.
-# The GUI bundle ships the npm packages Vite bundled (recorded by third-party-licenses.ts
-# during `npm run build`) and the Rust crates compiled into the transpiled a2l-daq wasm.
-gui_notices() {
-    if [ ! -f canking-gui/third-party-npm.json ]; then
-        echo "No canking-gui/third-party-npm.json; run 'npm run build' (or ./run.sh gui) first" >&2
-        exit 1
-    fi
-    write_license canking-gui/license.txt "DAQ Configurator"
-    node tools/third-party-notices.mjs \
-        --product "DAQ Configurator" \
-        --out canking-gui/THIRD_PARTY_LICENSES.html \
-        --npm canking-gui/third-party-npm.json \
-        --cargo a2l-daq --cargo-args "--no-default-features --features component"
+# third_party_licenses <dir> <cargo-about args...>: <dir>/THIRD_PARTY_LICENSES.html for the crates in its wasm.
+third_party_licenses() {
+    local dir="$1"; shift
+    cargo about generate --fail -c about.toml -o "$dir/THIRD_PARTY_LICENSES.html" "$@" about.hbs
 }
 
-# Write license.txt and THIRD_PARTY_LICENSES.html (crates compiled into daq_decoder.wasm) into canking-service/.
-service_notices() {
+# The GUI's npm dependencies are listed in dist/THIRD_PARTY_LICENSES.md inside its .tgz (vite build.license).
+# The CJK fonts are only referenced from CSS url(), which vite does not track, so their licenses are copied here.
+gui_license() {
+    write_license canking-gui/license.txt "DAQ Configurator"
+    third_party_licenses canking-gui -m a2l-daq/Cargo.toml --no-default-features --features component || exit 1
+
+    local pkg
+    for pkg in @fontsource/noto-sans-jp @fontsource/noto-sans-sc; do
+        printf '%s %s (%s)\n\n' "$pkg" \
+            "$(node -p "require('./canking-gui/node_modules/$pkg/package.json').version")" \
+            "$(node -p "require('./canking-gui/node_modules/$pkg/package.json').license")"
+        cat "canking-gui/node_modules/$pkg/LICENSE" || exit 1
+        printf '\n\n'
+    done > canking-gui/THIRD_PARTY_LICENSES_FONTS.txt
+}
+
+service_license() {
     write_license canking-service/license.txt "DAQ Decoder"
-    node tools/third-party-notices.mjs \
-        --product "DAQ Decoder" \
-        --out canking-service/THIRD_PARTY_LICENSES.html \
-        --cargo daq-decoder
+    third_party_licenses canking-service -m canking-service/Cargo.toml
 }
 
 # Read name/version/description/author + the canking.* fields out of package.json and write dist/ck-ext-info.json
@@ -133,7 +135,7 @@ gui_stage() {
     tgz_file=$(cd canking-gui && ls ./*.tgz 2>/dev/null | head -n 1)
     stage_bundle canking-gui "$tgz_file" "${tgz_file##*/}" \
         "No .tgz found in canking-gui/; run 'npm run package' (or ./run.sh gui) first" \
-        THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt user-guide.md UserGuide.html
+        THIRD_PARTY_LICENSES.html THIRD_PARTY_LICENSES_FONTS.txt license.txt ReleaseNotes.txt user-guide.md UserGuide.html
 }
 
 # Bundle a staged artifact  + ck-ext-info.json + ev. signature into a .ckext file under <dir>/dist/,
@@ -177,7 +179,7 @@ pack_ckext() {
 gui_pack() {
     pack_ckext canking-gui "dist/*.tgz" \
         "No staged .tgz in canking-gui/dist/; run './run.sh stage' first" \
-        THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt user-guide.md UserGuide.html
+        THIRD_PARTY_LICENSES.html THIRD_PARTY_LICENSES_FONTS.txt license.txt ReleaseNotes.txt user-guide.md UserGuide.html
 }
 
 # Read name/version/description from Cargo.toml, author from the workspace Cargo.toml and display_name
@@ -256,8 +258,8 @@ gui_group() {
 }
 
 stage_group() {
-    step "generate license notices (GUI)" gui_notices
-    step "generate license notices (service)" service_notices
+    step "license files (GUI)" gui_license
+    step "license files (service)" service_license
     step "stage bundle for signing (GUI)" gui_stage
     step "extract extension info (GUI)" gui_extract_info
     step "stage bundle for signing (service)" service_stage
