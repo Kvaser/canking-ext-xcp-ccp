@@ -8,7 +8,7 @@
     "extensionType": "WorkspaceView"
   },
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "files": [
     "dist",

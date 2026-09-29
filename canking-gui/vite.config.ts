@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import thirdPartyLicenses from "./third-party-licenses";
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), thirdPartyLicenses("third-party-npm.json")],
   build: {
     rolldownOptions: {
       output: {

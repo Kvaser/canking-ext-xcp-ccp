@@ -3,7 +3,10 @@ name = "daq-decoder"
 version = "1.0.0"
 edition = "2021"
 description = "DAQ decoder for CanKing"
-authors = ["Kvaser AB"]
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 wit-bindgen = "0.58.0"

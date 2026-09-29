@@ -28,3 +28,8 @@ src/a2l-daq-wasm/
 *.njsproj
 *.sln
 *.sw?
+
+# generated license notices (run.sh stage)
+third-party-npm.json
+THIRD_PARTY_LICENSES.html
+license.txt

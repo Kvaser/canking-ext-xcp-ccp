@@ -4,7 +4,7 @@ The DAQ Configurator is a customized workspace pane for setting up DAQ lists. Th
 
 ## Overview
 
-This pane allows the user to read in an A2L file, filter & select through available measurement signals, assign to available events, optionally set up a t-script with trigger, and lastly, apply to a CanKing data-processor and download needed artefacts. When used in CanKing, it is best setup together with a Message Trace or Signal Plot. After starting a measurement the data-processor sends out CAN frames to the ECU to initiate DAQ with the provided config. The ECU will then send out frames with the requested data and interval. In the Message Trace the CAN frames will be tagged "DAQ" and to decode them the "Fixed Position" option in the top-left of the pane needs to be toggled. In the Signal Plot the signals need to be selected to show up in subsequent measurements.
+This pane allows the user to read in an A2L file, filter & select through available measurement signals, assign to available events, optionally set up a t-script with trigger, and lastly, apply to a CanKing data-processor and download needed artefacts. When used in CanKing, it is best set up together with a Message Trace or Signal Plot. After starting a measurement the data-processor sends out CAN frames to the ECU to initiate DAQ with the provided config. The ECU will then send out frames with the requested data and interval. In the Message Trace the CAN frames will be tagged "DAQ" and to decode them the "Fixed Position" option in the top-left of the pane needs to be toggled. In the Signal Plot the signals need to be selected to show up in subsequent measurements.
 
 ## Support
 
@@ -16,11 +16,11 @@ The extension comes in the form of a 5-step wizard:
 
 ### - Load A2L
 
-Select a .a2l file from your machine to start. Some general information about available protocols, signals and events will show. If the a2l supports several protocols one has to be picked and the extension will work toward chosen protocol.
+Select a .a2l file from your machine to start. Some general information about available protocols, signals and events will show. If the a2l supports several protocols one has to be picked and the extension will work toward the chosen protocol.
 
 ### - Select Signals
 
-A scrollview with the available signals will show up which can be searched (both signal name and description) and filtered (by size). Virtual signals are marked as such and if a signal is not available for measurement through the extension then the reason will be shown.
+A scrollview with the available signals will show up which can be searched (by name, description or unit), filtered by measurement group (when the A2L declares groups; a group includes its sub-groups) and sorted by size. Virtual signals are marked as such and if a signal is not available for measurement through the extension then the reason will be shown.
 
 ### - Assign events
 
@@ -31,15 +31,15 @@ Assign each signal to any available event. One DAQ-list can only belong to one e
 In this section different options related to the Memorator t-script can be set if that is the goal with this extension.
 
 #### Options
-- Override A2L bus setting - toggle to be able to manually set the bit rate to a different value.
+- Override A2L bus settings - toggle to be able to manually set the bit rate to a different value.
 - Trigger - select signal, operator and value. Several conditions are AND'ed together.
 - Logging options - customize the CAN channel index, pretrigger time (ms) and if the logging should stop after a certain time.
 
-It is also possible to avoid needing the DBC file when compiling the t-script. Checking this option will embed the extra structs and decoders needed for the t-script retreive the correct values from the CAN frames.
+It is also possible to avoid needing the DBC file when compiling the t-script. Checking "Standalone t-script (no DBC needed, experimental feature)" will embed the extra structs and decoders needed for the t-script to retrieve the correct values from the CAN frames.
 
 ### - Apply & export
 
-Choose the source that the data-processor should latch on to and whether it should start DAQ with the given config on measurement start. Pressing "Apply to dataprocessor" will compile the config, create a data-processor node and inject the config to it. After that, the option to download the DBC file, the t-script and the json config will be available.
+Choose the source that the data-processor should latch on to and whether it should start DAQ with the given config on measurement start. Pressing "Apply to data processor" will compile the config, create a data-processor node and inject the config to it. After that, the option to download the DBC file, the t-script and the json config will be available.
 
 #### DAQ list CAN identifiers
 
@@ -56,4 +56,4 @@ This step also lists every packed DAQ list together with the CAN identifier it t
 
 - The PID present in the config is only read from the A2L or an estimate and might not exist at all. The ECU responds with the correct information at runtime and the data processor adjusts accordingly, but the config and the generated artefacts will still have the old PID for each DAQ list.
 
-- Setting the log level to "Debug" could reveal alot more of what is happening incase something is not working correctly.
+- Setting the log level to "Debug" could reveal a lot more of what is happening in case something is not working correctly.

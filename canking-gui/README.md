@@ -13,24 +13,35 @@ A CanKing workspace view for setting up XCP/CCP DAQ measurements from an A2L fil
 ## How it works
 
 All A2L parsing, DAQ list packing, and DBC/t-script generation happens in the browser through the [`a2l-daq`](../a2l-daq/README.md) Rust crate, compiled to
-a WASI P2 component and transpiled to JS with `jco` into `src/a2l-daq-wasm/`(generated with `npm run build:wasm`).
+a WASI P2 component and transpiled to JS with `jco` into `src/a2l-daq-wasm/` (generated with `npm run build:wasm`, or `npm run transpile:wasm` to only re-run the
+`jco` step on an already built `target/wasm32-wasip2/release/a2l_daq.wasm`).
 
 State handling:
 
-- **Project data**: signal/event selections, trigger settings, processor name and node id.
+- **Project data**: signal/event selections, trigger conditions, t-script options, protocol, `startDaq`, DAQ list CAN id
+  overrides (`daqCanIdOverrides`), processor name and node id.
 - **Session data**: the A2L contents, wizard step, last warnings/DBC/config/t-script. 
 
 ## Development
 
 ```sh
+npm install          # once
 npm run start        # vite dev server + CanKing in debug mode
 npm run startpreview # vite dev server + CanKing in production mode
 npm run build:wasm   # rebuild the a2l-daq wasm component + jco transpile
-npm run package      # build + npm pack + ck.exe pack extension
+npm run package      # npm pack (runs build via prepack) -> .tgz
 ```
 
 `build:wasm` requires the Rust toolchain with the `wasm32-wasip2` target (see the [root README](../README.md#building)).
 The compiled component is picked up from the workspace-level `target/` directory.
+
+The installable `.ckext` is not produced here; it is made from that `.tgz` by `./run.sh stage pack` from the repo root.
+
+`start`/`startpreview` launch CanKing (via the `canking` script) from `C:/Program Files/Kvaser CanKing/Kvaser CanKing.exe`,
+so they expect a Windows machine with CanKing installed at that path.
+
+The `@kvaser/canking-api` dependency is published on the public npm registry, but under Kvaser's EULA, not this
+repository's MIT license.
 
 ## Info
 - CanKing validates the configuration against a schema inferred from the data processor's default config. 

@@ -6,11 +6,16 @@
 # Usage:
 #   ./run-all.sh [case.json ...]      (default: every cases/*.case.json)
 #
-# Environment:
-#   CK          path to ck.exe / ck            (auto-detected)
-#   EXT_NAME    service extension name         (default: daq_decoder)
-#   SETTLE_S    seconds to let a measurement run (default: 3)
-#   OUT_DIR     directory for generated artifacts (default: tests/ck-cli/out)
+# Environment (full table with defaults in README.md, "Environment"):
+#   CK                path to ck.exe / ck                        (auto-detected)
+#   EXT_NAME          service extension name                     (default: daq_decoder)
+#   EXT_CKEXT         packaged extension to install before the run (default: newest canking-service/dist/$EXT_NAME-*.ckext)
+#   EXT_WASM          wasm to install when no .ckext is packaged (default: target/wasm32-wasip2/release/$EXT_NAME.wasm)
+#   EXT_DISPLAY_NAME  display name the log assertions match on   (default: DAQ Decoder)
+#   SETTLE_S          seconds to let a measurement run           (default: 3; 5 in 90-live-physical)
+#   REPLAY_MS         fixed replay rate for recorded logs        (default: 1)
+#   OUT_DIR           directory for generated artifacts          (default: tests/ck-cli/out)
+#   PHYS_CHANNEL      physical CAN channel wired to the ECU, for 90-live-physical (auto-detected if only one)
 
 set -u
 INVOKED_FROM="$PWD"

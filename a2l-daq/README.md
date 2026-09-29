@@ -50,8 +50,8 @@ The shared data model, the DAQ command generation, and the `Config` JSON contrac
   |- pipeline.rs          Orchestrates parse + event assignments -> { daq_lists, dbc, warnings }
   |- traceability.rs      Generates a traceability comment for the generated artefacts so that the source is more easily found.
 |-tests/
-  |-integration_test.rs   End to end testing for the a2l-daq crate
-  |-standalone_tscript    End to end testing for building a t-script without dbc-file
+  |-integration_tests.rs  End to end testing for the a2l-daq crate
+  |-standalone_tscript.rs End to end testing for building a t-script without dbc-file
 |-wit/
   |-world.wit             WASM-WASIP2 outward interface 
 ```
@@ -96,7 +96,9 @@ The generated `.t` file does the following at runtime:
 4. Optionally starts a countdown timer that stops logging (and stops DAQ / disconnects) after N ms.
 5. Installs the signal trigger hook (start/stop logging when the condition over the sampled signal values becomes true).
 
-The CLI compiles the `.t` to a `.txe` automatically when `scc.exe`  (from Canlib) is found.
+The CLI compiles the `.t` to a `.txe` automatically when `scc.exe` (from Canlib) is found at
+`C:\Program Files (x86)\Kvaser\Canlib\Bin\scc.exe` (Windows only; no other location or `PATH` is searched).
+Otherwise it prints the `scc.exe` command to run manually.
 
 #### The trigger and the PID multiplexer
 
@@ -117,7 +119,7 @@ This applies to both signal-access modes; only `<read>` differs.
 
 #### How the script reaches signal values
 
-Two modes, selected per generation DBC mode is the default.
+Two modes, selected per generation; DBC mode is the default.
 
 | | DBC mode | Standalone mode |
 |---|---|---|
@@ -127,6 +129,7 @@ Two modes, selected per generation DBC mode is the default.
 | `.Raw` triggers | supported; latched separately from `.Phys` | only where the scaling is the identity |
 
 Standalone mode exists so the `.t` can be used on its own. The DBC is still generated, since it is what decodes the resulting log.
+
 ---
 
 ## Building and running
@@ -143,7 +146,8 @@ All commands work from the workspace root (or from this directory). Build output
 
 ### 1. CLI (default)
 
-Interactive native binary. A2L in, DBC + t-script out:
+Interactive native binary. A2L in, DBC + t-script out. Usage: `a2l-daq-cli <path_to_a2l_file>` (a single positional
+argument, no flags; everything else is asked for through interactive prompts):
 
 ```sh
 cargo run -p a2l-daq --release -- path/to/file.a2l
@@ -155,7 +159,9 @@ The tool prompts you to:
 2. Assign selected signals to event channels.
 3. Configure CAN channel index, bitrate, pretrigger, timer, and trigger conditions.
 
-Outputs are written next to the input A2L file: `file.dbc` and a `.t` script (plus `.txe` if `scc.exe` is installed).
+Outputs are written next to the input A2L file: `file.dbc` and a `.t` script (plus `.txe` if `scc.exe` is found at the path above).
+The `.t` base name is the A2L's with characters other than `A-Z a-z 0-9 _ -` replaced by `_` and truncated to 8 characters,
+which is what the logger accepts (e.g. `SampleECU.a2l` -> `SampleEC.t`).
 
 ### 2. WASM component
 
@@ -172,8 +178,8 @@ The interface is defined in [`wit/world.wit`](wit/world.wit) and implemented by 
 ```wit
 inspect:       func(a2l) -> result<a2l-summary, string>;
 build:         func(a2l, source-name, selected, assignments, protocol) -> result<core-output, string>;
-build-config:  func(a2l, source-name, selected, assignments, start-daq, protocol) -> result<config-output, string>;
-build-tscript: func(a2l, source-name, selected, assignments, options, protocol) -> result<tscript-output, string>;
+build-config:  func(a2l, source-name, selected, assignments, start-daq, daq-can-id-overrides, protocol) -> result<config-output, string>;
+build-tscript: func(a2l, source-name, selected, assignments, options, daq-can-id-overrides, protocol) -> result<tscript-output, string>;
 ```
 
 (Parameter names only; see [`wit/world.wit`](wit/world.wit) for the types.)
