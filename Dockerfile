@@ -7,7 +7,8 @@ FROM rust:1.97-slim-bookworm
 RUN rustup target add wasm32-wasip2
 
 # Third-party license notices for the wasm components (run.sh stage)
-RUN cargo install --locked --features cli cargo-about@0.9.2
+RUN cargo install --locked --features cli cargo-about@0.9.2 \
+ && rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
 
 # Copy node from image
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
