@@ -2,6 +2,10 @@
 name = "a2l-daq"
 version = "1.0.0"
 edition = "2021"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 protocol-core = { path = "../protocol-core" }

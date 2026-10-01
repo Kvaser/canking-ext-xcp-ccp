@@ -8,7 +8,25 @@ bash tests/ck-cli/run-all.sh      # or directly
 bash tests/ck-cli/run-all.sh tests/ck-cli/cases/ccp-sample.case.json
 ```
 
-Everything is driven through the CanKing CLI (`ck`), documented at `C:\Program Files\Kvaser CanKing\docs\user-guide\html\ck\overview.html`. (default)
+Everything is driven through the CanKing CLI (`ck`). On Windows its documentation is installed with CanKing, at
+`C:\Program Files\Kvaser CanKing\docs\user-guide\html\ck\overview.html` (default install location).
+
+`lib.sh` locates `ck` as follows: `$CK` if set, otherwise the first executable of
+`/c/Program Files/Kvaser CanKing/service/ck.exe`, `C:/Program Files/Kvaser CanKing/service/ck.exe`,
+`/opt/canking/service/ck`, and `ck` on `PATH`.
+
+### Prerequisites
+
+- The a2l-daq wasm transpiled into `canking-gui/src/a2l-daq-wasm/` (`npm run build:wasm` in `canking-gui`) and
+  `canking-gui/node_modules` installed (`npm install`). Without them `checks/10-config.sh` skips and every other check is blocked.
+- Node.js (every check and assert runs through `node`).
+- A running CanKing service, reachable through the `ck` CLI (see above). Without it every per-case check is blocked.
+- An empty CanKing measurement setup; the checks that add nodes skip otherwise.
+- Two channels from the Kvaser Virtual CAN Driver for `checks/40-live.sh` and `checks/45-live-pid-remap.sh` (skipped otherwise).
+- Optionally, a physical Kvaser interface wired to an ECU for `checks/90-live-physical.sh` (skipped otherwise).
+- Optionally, a built service extension (`canking-service/dist/daq_decoder-*.ckext` or the raw
+  `target/wasm32-wasip2/release/daq_decoder.wasm`), which `run-all.sh` installs before the run. Without one, whatever
+  `daq_decoder` is already installed is tested.
 
 ### Layout
 
@@ -20,7 +38,7 @@ tests/ck-cli/
 ├── checks/      one script per procedure being checked, numbered for run order
 ├── assert/      the actual assertions each check delegates to
 ├── util/        helpers for checks or asserts
-├── logs/        recorded log + config pairs for any "recorded"-kind case (see below)
+├── logs/        (not shipped) recorded log + config pairs for any "recorded"-kind case (see below)
 └── out/         generated artifacts during testing
 ```
 
@@ -71,7 +89,7 @@ Inputs are case files (`cases/*.case.json`), the stand-in for the GUI's selectio
 **Expected result.** Exit 0 and print the config
 
 Fails on: an unknown signal or event name in the case file, a protocol the A2L does not declare, code failures, `configJson` not parsing, 
-or (with `--strict`) any component warning.
+or any component warning (the check always runs `util/build-config.mjs` with `--strict`).
 
 Skips when needed files are missing
 
@@ -146,6 +164,38 @@ count depends on the config's signal/DAQ-list layout.
 
 ---
 
+### `checks/45-live-pid-remap.sh`: PID calibration against an ECU report
+
+Runs only for `ccp-sample` (`# only-for-cases: ccp-sample`), and skips unless the config is CCP with at least two DAQ lists.
+Uses the same virtual channel pair as `40-live`.
+
+- **Pass 1: discovery.** Runs a measurement with `start_daq: true` and finds the extension's `GET_DAQ_SIZE` command for the
+  last DAQ list in the logged frames, to learn its command counter.
+- **Pass 2: re-keying.** Builds a responder log (`util/make-responder.mjs`) that answers that command with a different first PID
+  (`0x12`) followed by a DAQ frame keyed to it, runs it through `ck analysis`, and asserts with `assert/decode-synthetic.mjs`
+  that the frame decoded to that list's own signals.
+
+**Expected result.** Exit 0 and `decoder re-keyed daq list <n> from 0x<configured> to 0x12: ...`.
+
+---
+
+### `checks/90-live-physical.sh`: real ECU on the bench
+
+A sanity check against a real ECU connected through a physical Kvaser interface. It uses the case's config, so it
+is only meaningful when the case matches the connected ECU (the shipped cases describe sample A2Ls, not real hardware).
+
+Opens the physical channel (`PHYS_CHANNEL`, or the only non-virtual channel if exactly one exists; skips otherwise) with
+the config's bit rate/CAN FD settings, attaches the extension with `start_daq: true` and runs for `SETTLE_S` (default `5`
+here). It then asserts, from the service event log and the message log, that:
+
+1. the channel opened (skips if canlib could not open it),
+2. the extension queued the init sequence and sent the stop sequence,
+3. CONNECT was sent on the command id (only a note if no node ACKed it),
+4. DAQ frames came back on the DTO id (skips if none did),
+5. the extension logged no unexpected warnings, and the received frames decode consistently with the config (`assert/decode-log.mjs`).
+
+---
+
 ### What a check can rely on
 
 Everything in `out/` is derived, so a check never has to know where a case came from:
@@ -160,6 +210,7 @@ Everything in `out/` is derived, so a check never has to know where a case came 
 | `<name>.startdaq.json` | `40-live` / `45-live-pid-remap` | the config with `start_daq` forced on |
 | `<name>.pid-remap-responder.asc` | `45-live-pid-remap` | the crafted GET_DAQ_SIZE response + synthetic re-keyed DAQ frame |
 | `<name>.pid-remap.expected.json` / `.pid-remap.frames.json` | `45-live-pid-remap` | what pass 2's synthetic frame must decode to, and what `ck analysis` actually decoded |
+| `<name>.physical.frames.json` | `90-live-physical` | raw `ck analysis frames-between` output of the ECU log |
 
 ### Adding a case
 
@@ -171,8 +222,8 @@ Either way `run-all.sh` picks it up by glob and every check applies.
 
 A new `checks/NN-name.sh`:
 
-- Numbered to run after whatever it depends on (`10-config.sh`'s output is always available. 
-Anything depending on a running measurement fits after `40-live.sh`'s setup, e.g. `45-`).
+- Numbered to run after whatever it depends on. `10-config.sh`'s output is always available;
+anything depending on a running measurement fits after `40-live.sh`'s setup, e.g. `45-`.
 - `source`s `../lib.sh`, uses `ck_`, `pass`/`fail`/`skip`, and the `track_node`/`cleanup_set` node-tracking helpers.
 - Delegates real assertions to a small script under `assert/`
 - Picked up by `run-all.sh` automatically
@@ -214,14 +265,15 @@ result: ok=13 skipped=2 blocked=0 failed=0
 | `EXT_CKEXT` | newest `canking-service/dist/$EXT_NAME-*.ckext` | packaged extension installed before the run, if present |
 | `EXT_WASM` | `target/wasm32-wasip2/release/$EXT_NAME.wasm` | wasm installed before the run when no `.ckext` is packaged |
 | `EXT_DISPLAY_NAME` | `DAQ Decoder` | manifest display name the log assertions match on |
-| `SETTLE_S` | `3` | seconds a live measurement runs |
+| `SETTLE_S` | `3` (`5` in `90-live-physical`) | seconds a live measurement runs |
 | `REPLAY_MS` | `1` | fixed replay rate for recorded logs |
 | `OUT_DIR` | `tests/ck-cli/out` | where derived artifacts go |
+| `PHYS_CHANNEL` | auto-detected if exactly one physical channel exists | CAN channel number wired to the ECU, for `90-live-physical` |
 
 ---
 
 ### One worker at a time
 
 `run-all.sh` mutates the shared CanKing measurement setup, so two concurrent runs on one machine corrupt each other.
-Give the agent a single executor, or serialise the job with a lock. `checks/20-apply.sh` and `checks/40-live.sh` do refuse to run against
-a non-empty setup, which turns some collisions into skips rather than corruption.
+Run the suite on a machine with no other CanKing sessions, one run at a time (or serialise runs with a lock). `checks/20-apply.sh`,
+`checks/40-live.sh`, `checks/45-live-pid-remap.sh` and `checks/90-live-physical.sh` do refuse to run against a non-empty setup, which turns some collisions into skips rather than corruption.

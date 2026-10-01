@@ -1,3 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["protocol-core", "a2l-daq", "canking-service"]
+
+[workspace.package]
+authors = ["Kvaser AB"]
+license = "MIT"
+repository = "https://github.com/Kvaser/canking-ext-xcp-ccp"

@@ -131,8 +131,9 @@ pipeline {
                         unstash "dist-service"
                         // Retrieve sign script from artifactory
                         //pwsh "curl --globoff -Lo Sign-CkextBundle.ps1 http://artifact.kvaser.se/artifactory/canking-generic/canking/service/[RELEASE]/CanKingService-[RELEASE].tar.gz!/scripts/Sign-CkextBundle.ps1"
-                        pwsh "./Sign-CkextBundle.ps1 -InputBundle canking-gui\\dist -LicenseType Free"
-                        pwsh "./Sign-CkextBundle.ps1 -InputBundle canking-service\\dist -LicenseType Free"
+                        // Open source (MIT, see LICENSE); the notice and EULA fields end up in ck-ext-info.json.
+                        pwsh "./Sign-CkextBundle.ps1 -InputBundle canking-gui\\dist -LicenseType OpenSource -CopyrightNotice '(c) Kvaser AB. Licensed under the MIT License.' -Eula 'MIT License, see license.txt.'"
+                        pwsh "./Sign-CkextBundle.ps1 -InputBundle canking-service\\dist -LicenseType OpenSource -CopyrightNotice '(c) Kvaser AB. Licensed under the MIT License.' -Eula 'MIT License, see license.txt.'"
                         
                         stash includes: 'canking-gui/dist/**', name: 'dist-gui'
                         stash includes: 'canking-service/dist/**', name: 'dist-service'
