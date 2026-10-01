@@ -44,11 +44,19 @@ pub(crate) fn build_frame_definitions(
                 is_extended_id: Some(can_id > 0x7FF),
                 is_can_fd: Some(can_fd),
                 is_can_fd_with_brs: Some(fd_brs),
-                data_length: Some(decoder.frame_data_length(can_id)),
+                data_length: Some(frame_length(decoder.frame_data_length(can_id), can_fd)),
                 signals,
             }
         })
         .collect()
+}
+
+/// `len` rounded up to the next length a frame can carry: CAN FD only allows 0-8, 12, 16, 20, 24, 32, 48 or 64 bytes.
+fn frame_length(len: u32, can_fd: bool) -> u32 {
+    if !can_fd || len <= 8 {
+        return len;
+    }
+    [12, 16, 20, 24, 32, 48, 64].into_iter().find(|&n| n >= len).unwrap_or(64)
 }
 
 /// The multiplexor signal every DAQ frame carries as its first byte.
@@ -135,6 +143,15 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use protocol_core::protocol::Protocol;
+
+    #[test]
+    fn can_fd_frame_length_rounds_up_to_a_valid_dlc() {
+        assert_eq!(frame_length(21, true), 24);
+        assert_eq!(frame_length(20, true), 20);
+        assert_eq!(frame_length(9, true), 12);
+        assert_eq!(frame_length(7, true), 7);
+        assert_eq!(frame_length(3, false), 3);
+    }
 
     #[test]
     fn reports_layout_conversion_and_frame_data_length() {

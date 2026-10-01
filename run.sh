@@ -41,8 +41,7 @@ step() {
 
 gui_install() {
     cd canking-gui
-    # npm ci needs a clean node_modules
-    if [ -n "${CI:-}" ]; then npm ci; else npm install; fi
+    npm ci
 }
 
 gui_transpile() { cd canking-gui && npm run build:wasm; }
@@ -221,14 +220,14 @@ service_stage() {
     version=$(sed -n 's/^version = "\(.*\)"$/\1/p' canking-service/Cargo.toml | head -n 1)
     stage_bundle canking-service "$wasm_src" "daq_decoder-${version}.wasm" \
         "No daq-decoder wasm found at $wasm_src; run './run.sh wasm' first" \
-        THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt UserGuide.html
+        THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt user-guide.md UserGuide.html
 }
 
 # Bundle the staged wasm + ck-ext-info.json into a .ckext file under dist/.
 service_pack() {
     pack_ckext canking-service "dist/*.wasm" \
         "No staged wasm in canking-service/dist/; run './run.sh stage' first" \
-        THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt UserGuide.html
+        THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt user-guide.md UserGuide.html
 }
 
 rust_group() {
