@@ -136,8 +136,7 @@ impl DaqMode {
 /// XCP lets the A2L declare, per list, that it transmits on something other than the
 /// transport's shared default id (`CAN_ID_SLAVE` / CCP `DTO_ID`): either a fixed id the
 /// ECU always uses (`DAQ_LIST_CAN_ID ... FIXED <id>`, or CCP's `CAN_ID_FIXED`), or a
-/// runtime-assignable one (`DAQ_LIST_CAN_ID ... VARIABLE`, XCP only) that the master picks
-/// via `SET_DAQ_ID`.
+/// runtime-assignable one (`DAQ_LIST_CAN_ID ... VARIABLE`, XCP only) that the master picks via `SET_DAQ_ID`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(tag = "kind", rename_all = "snake_case"))]
@@ -147,9 +146,8 @@ pub enum CanIdSource {
     Default,
     /// Always transmits on `id`; not user-overridable.
     Fixed { id: u32 },
-    /// The ECU accepts `SET_DAQ_ID` to assign this list's CAN id at runtime. `assigned` is the id
-    /// chosen in the configurator; `None` means none has been chosen, so no `SET_DAQ_ID` is sent
-    /// and the list stays on the transport's shared default id, same as `Default`.
+    /// The ECU accepts `SET_DAQ_ID` to assign this list's CAN id at runtime. `assigned` is the id chosen in the configurator.
+    /// `None` means none has been chosen, so no `SET_DAQ_ID` is sent and the list stays on the transport's shared default id.
     Dynamic { assigned: Option<u32> },
 }
 
@@ -173,8 +171,7 @@ impl CanIdSource {
 }
 
 impl From<Option<u32>> for CanIdSource {
-    /// A bare "fixed id, or none" source, as CCP's `CAN_ID_FIXED` declares it: CCP has no
-    /// runtime-assignable equivalent, so there is no `Dynamic` case here.
+    /// A bare "fixed id, or none" source, as CCP's `CAN_ID_FIXED` declares it.
     fn from(id: Option<u32>) -> Self {
         match id {
             Some(id) => CanIdSource::Fixed { id },
@@ -207,6 +204,8 @@ pub struct DaqInfo {
     pub max_odt_entry_size: u16,
     pub timestamp_size: u16,
     pub timestamp_fixed: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub min_daq: u16,
 }
 
 /// A single event channel as declared in an `/begin EVENT` block.

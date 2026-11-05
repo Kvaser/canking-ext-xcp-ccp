@@ -81,6 +81,7 @@ impl Config {
                     max_odt_entry_size: 7,
                     timestamp_size: 0,
                     timestamp_fixed: false,
+                    min_daq: 0,
                 },
                 event_info: EventInfo {
                     events: vec![EventEntry {

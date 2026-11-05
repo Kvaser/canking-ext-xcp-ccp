@@ -39,6 +39,7 @@ pub use crate::protocol::{
 /// Snapshot of everything the phase builders need from the parsed project.
 struct Ctx<'a> {
     is_static: bool,
+    min_daq: u16,
     big_endian: bool,
     timestamp_size: u16,
     events: &'a [EventEntry],
@@ -51,7 +52,7 @@ impl Ctx<'_> {
         if self.is_static {
             daq.id
         } else {
-            index as u16
+            self.min_daq + index as u16
         }
     }
 }
@@ -118,6 +119,7 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
     let xcp = project.xcp_data.as_ref();
     Ctx {
         is_static: xcp.map(|x| x.daq_info.mode.is_static()).unwrap_or(false),
+        min_daq: xcp.map(|x| x.daq_info.min_daq).unwrap_or(0),
         big_endian: xcp
             .and_then(|x| x.protocol_layer.as_ref())
             .and_then(|p| p.byte_order.as_ref())
@@ -479,6 +481,23 @@ mod tests {
                 &cmd.bytes[2..4],
                 &[0x00, 0x00],
                 "command 0x{code:02X} must address allocated list 0: {}",
+                cmd.label
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_lists_are_numbered_after_the_predefined_ones() {
+        let mut p = project(DaqMode::Dynamic, vec![], 0);
+        p.xcp_data.as_mut().unwrap().daq_info.min_daq = 2;
+        let cmds = build_init_commands(&p, &one_daq_list(5));
+
+        for code in [0xD4u8, 0xD3, 0xE2, 0xE0, 0xDE] {
+            let cmd = cmds.iter().find(|c| c.bytes[0] == code).unwrap();
+            assert_eq!(
+                &cmd.bytes[2..4],
+                &[0x02, 0x00],
+                "0x{code:02X}: {}",
                 cmd.label
             );
         }

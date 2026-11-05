@@ -7,8 +7,9 @@ use super::{
     Protocol, ProtocolLayerInfo, XcpData, XcpInfo,
 };
 
-/// Finds the module-level `/begin IF_DATA XCP /end IF_DATA` and returns the parsed
-/// `XcpData`, or `None` if the file has no XCP interface at all.
+/// Finds the module-level `/begin IF_DATA XCP /end IF_DATA` and returns the parsed `XcpData`
+/// 
+/// Returns `None` if the file has no XCP interface at all.
 pub(super) fn parse_if_data_xcp(tokens: &[String]) -> Option<XcpData> {
     let mut fallback: Option<&[String]> = None;
 
@@ -111,6 +112,15 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
         _ => DaqMode::StaticAndDynamic,
     };
 
+    // Header: mode MAX_DAQ MAX_EVENT_CHANNEL MIN_DAQ ...; read MIN_DAQ only when the counts before it are there.
+    let header: Vec<Option<u16>> = (1..=3)
+        .map(|i| tokens.get(i).and_then(|t| parse_u16_token(t)))
+        .collect();
+    let min_daq = match header[..] {
+        [Some(_), Some(_), Some(min)] => min,
+        _ => 0,
+    };
+
     let mut i = 0;
     while i < tokens.len() {
         if tokens[i] == "/begin" {
@@ -153,12 +163,14 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
         max_odt_entry_size,
         timestamp_size,
         timestamp_fixed,
+        min_daq,
     };
     (daq_info, events)
 }
 
-/// Parses a `/begin TIMESTAMP_SUPPORTED` block, returning the timestamp width in
-/// bytes and whether `TIMESTAMP_FIXED` is set.
+/// Parses a `/begin TIMESTAMP_SUPPORTED` block.
+/// 
+/// Returns the timestamp width in bytes and whether `TIMESTAMP_FIXED` is set.
 fn parse_timestamp_supported(tokens: &[String]) -> (u16, bool) {
     let mut size = 0u16;
     let mut fixed = false;
@@ -318,8 +330,7 @@ fn parse_xcp_on_can(tokens: &[String]) -> (Option<XcpInfo>, Vec<(u16, CanIdSourc
     )
 }
 
-/// Parses a `/begin DAQ_LIST_CAN_ID` block: the DAQ list identifier, followed by either
-/// `FIXED <id>` (the list always transmits on `id`) or `VARIABLE` it can be set
+/// Parses a `/begin DAQ_LIST_CAN_ID` block: the DAQ list identifier, followed by either `FIXED <id>` or `VARIABLE` if it is mutable or not
 ///
 /// Returns `(daq list identifier, CAN id source)`.
 fn parse_daq_list_can_id(tokens: &[String]) -> Option<(u16, CanIdSource)> {
