@@ -11,6 +11,7 @@ pub use protocol_core::types::{DaqList, Odt, OdtEntry};
 struct Candidate {
     names: Vec<String>,
     ecu_address: u64,
+    address_extension: u8,
     size: u16,
     signal_index: usize,
 }
@@ -438,6 +439,7 @@ fn split_signal(
     let candidate = |name: String, from: u64, to: u64| Candidate {
         names: vec![name],
         ecu_address: from,
+        address_extension: signal.address_extension,
         size: (to - from) as u16,
         signal_index,
     };
@@ -454,20 +456,22 @@ fn split_signal(
         .collect()
 }
 
-/// Merge candidates that touch or overlap in ECU memory into a single entry.
+/// Merge candidates that touch or overlap in ECU memory (same address extension) into a single entry.
 /// 
 /// Granule-aligned candidates can overlap, e.g. two bytes inside one DWORD.
 fn merge_contiguous(mut candidates: Vec<Candidate>, max_size: u16) -> Vec<Candidate> {
+    // Entries never mix extensions, but an ODT or DAQ list still may; enforce A2L `ADDRESS_EXTENSION_ODT`/`_DAQ` in packing if an ECU declares it.
     if candidates.is_empty() {
         return candidates;
     }
     // Sort by address
-    candidates.sort_by_key(|c| c.ecu_address);
+    candidates.sort_by_key(|c| (c.address_extension, c.ecu_address));
     let end = |c: &Candidate| c.ecu_address + c.size as u64;
     let mut merged: Vec<Candidate> = Vec::new();
     let mut current = candidates.remove(0);
     for next in candidates {
-        let touches = next.ecu_address <= end(&current);
+        let touches = current.address_extension == next.address_extension
+            && next.ecu_address <= end(&current);
         let merged_size = end(&current).max(end(&next)) - current.ecu_address;
         if touches && merged_size <= max_size as u64 {
             current.size = merged_size as u16;
@@ -1629,6 +1633,35 @@ mod tests {
             (chunk("F[0]"), chunk("F[1]")),
             (Some(2), Some(2)),
             "each chunk is F's bytes in its DWORD"
+        );
+    }
+
+    #[test]
+    fn adjacent_signals_in_different_address_spaces_are_not_merged() {
+        let sig = |name: &str, ecu_address, address_extension| ParsedSignal {
+            name: name.into(),
+            ecu_address,
+            address_extension,
+            size: 2,
+            event: Some("E".into()),
+            ..Default::default()
+        };
+        let project = A2lProject {
+            signals: vec![sig("A", 0x100, 0), sig("B", 0x102, 1), sig("C", 0x104, 1)],
+            xcp_data: xcp_with_daq_lists(vec![unlimited_daq(0)]),
+            ..Default::default()
+        };
+        let (lists, _) = build_daq_list(&project, Protocol::Xcp);
+        let mut entries: Vec<Vec<String>> = lists[0]
+            .odts
+            .iter()
+            .flat_map(|o| &o.entries)
+            .map(|e| e.names.clone())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![vec!["A".to_string()], vec!["B".into(), "C".into()]]
         );
     }
 }

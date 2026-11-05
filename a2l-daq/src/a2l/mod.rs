@@ -399,6 +399,24 @@ mod tests {
     }
 
     #[test]
+    fn ecu_address_extension_is_parsed_and_defaults_to_zero() {
+        let content = r#"
+        /begin MEASUREMENT Ext "" UWORD NO_COMPU_METHOD 0 0 0 100 ECU_ADDRESS 0x1000 ECU_ADDRESS_EXTENSION 0x2 /end MEASUREMENT
+        /begin MEASUREMENT Plain "" UWORD NO_COMPU_METHOD 0 0 0 100 ECU_ADDRESS 0x2000 /end MEASUREMENT
+        "#;
+        let project = parse_a2l(content, &[]).unwrap();
+        let ext = |name: &str| {
+            project
+                .signals
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .address_extension
+        };
+        assert_eq!((ext("Ext"), ext("Plain")), (2, 0));
+    }
+
+    #[test]
     fn seed_key_dll_is_captured_regardless_of_block_order() {
         let after_tp_blob = r#"
       /begin IF_DATA ASAP1B_CCP

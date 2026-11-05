@@ -5,7 +5,7 @@
 //! signal X, and how is it scaled".
 
 use crate::protocol::Protocol;
-use crate::types::{A2lProject, ByteOrder, DaqList, ParsedSignal};
+use crate::types::{A2lProject, ByteOrder, DaqList, OdtEntry, ParsedSignal};
 use std::collections::HashMap;
 
 /// One field of a DAQ frame, in the order the DBC declares them.
@@ -81,14 +81,11 @@ pub fn daq_can_id(project: &A2lProject, protocol: Protocol) -> Option<u32> {
     }
 }
 
-/// Group DAQ lists by the CAN id they actually transmit on, given the transport's shared
-/// default id. Ascending by id.
+/// Group DAQ lists by the CAN id they actually transmit on, given the transport's shared default id. Ascending by id.
 ///
-/// Most lists share the module's default id, but a list may declare its own via XCP's
-/// `DAQ_LIST_CAN_ID` or CCP's `CAN_ID_FIXED` (see [`crate::types::CanIdSource`]). A caller that
-/// needs one message/hook per CAN id (the DBC writer, the standalone t-script generator) packs
-/// each group through the normal single-CAN-id layout pass, mirroring how `canking-service`'s
-/// `Decoder` keys frames by `(CAN id, PID)` rather than PID alone.
+/// Most lists share the module's default id, but a list may declare its own via XCP's `DAQ_LIST_CAN_ID` or CCP's `CAN_ID_FIXED` (see [`crate::types::CanIdSource`]).
+/// 
+/// A caller that needs one message/hook per CAN id (the DBC writer, the standalone t-script generator) packs each group through the normal single-CAN-id layout pass.
 pub fn group_by_can_id(daq_lists: &[DaqList], default_id: u32) -> Vec<(u32, Vec<DaqList>)> {
     let mut groups: Vec<(u32, Vec<DaqList>)> = Vec::new();
     for list in daq_lists {
@@ -120,8 +117,7 @@ pub fn signal_lookup(project: &A2lProject) -> HashMap<&str, &ParsedSignal> {
         .collect()
 }
 
-/// Resolve a signal name to its A2L definition: an exact match first, else
-/// the parent of a chunked array entry (`Name[i]`).
+/// Resolve a signal name to its A2L definition: an exact match first, else the parent of a chunked array entry (`Name[i]`).
 pub fn resolve_signal<'a>(
     signal_map: &HashMap<&str, &'a ParsedSignal>,
     name: &str,
@@ -132,6 +128,17 @@ pub fn resolve_signal<'a>(
             .and_then(|base| signal_map.get(base))
             .copied()
     })
+}
+
+/// The `ECU_ADDRESS_EXTENSION` an entry is sampled with. 
+/// 
+/// Packing never merges signals with different extensions into one entry, so its first signal speaks for all of them.
+pub fn address_extension(signal_map: &HashMap<&str, &ParsedSignal>, entry: &OdtEntry) -> u8 {
+    entry
+        .names
+        .first()
+        .and_then(|name| resolve_signal(signal_map, name))
+        .map_or(0, |s| s.address_extension)
 }
 
 /// A signal's scaling: `(factor, offset, unit)`, defaulting to unscaled/unitless.

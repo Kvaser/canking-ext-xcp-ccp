@@ -34,7 +34,8 @@
 //!
 //! Address extension is emitted as 0 for now
 
-use crate::types::{A2lProject, ByteOrder, DaqList, EventEntry};
+use crate::types::{A2lProject, ByteOrder, DaqList, EventEntry, ParsedSignal};
+use std::collections::HashMap;
 
 use crate::protocol::{dword, word};
 pub use crate::protocol::{
@@ -68,6 +69,7 @@ struct Ctx<'a> {
     dto_id: u32,
     bytes_only: bool,
     rasters: &'a [EventEntry],
+    signals: HashMap<&'a str, &'a ParsedSignal>,
 }
 
 /// Accumulates CRO commands, assigning each an auto-incrementing command counter.
@@ -178,6 +180,7 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
         dto_id: ccp.map(|c| c.info.dto_id).unwrap_or(0),
         bytes_only: ccp.is_some_and(|c| c.info.bytes_only),
         rasters: ccp.map(|c| c.rasters.as_slice()).unwrap_or(&[]),
+        signals: crate::layout::signal_lookup(project),
     }
 }
 
@@ -241,6 +244,7 @@ fn phase_write_entries(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
 
             for entry in &odt.entries {
                 let addr = entry.ecu_address as u32;
+                let ext = crate::layout::address_extension(&ctx.signals, entry);
                 // A `BYTES_ONLY` slave rejects multi-byte elements so each signal is registered as consecutive 1-byte elements.
                 let (chunk, count) = if ctx.bytes_only {
                     (1u16, entry.size)
@@ -263,7 +267,7 @@ fn phase_write_entries(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
                     seq.push(
                         CcpPhase::WriteEntries,
                         WRITE_DAQ,
-                        &[chunk as u8, 0x00, a[0], a[1], a[2], a[3]],
+                        &[chunk as u8, ext, a[0], a[1], a[2], a[3]],
                         if ctx.bytes_only {
                             format!(
                                 "WRITE_DAQ  {} byte {}/{} addr=0x{:08X}",
@@ -419,6 +423,24 @@ mod tests {
             cmds.iter().all(|c| c.bytes.len() == 8),
             "every CRO is 8 bytes"
         );
+    }
+
+    #[test]
+    fn write_daq_carries_the_signal_address_extension() {
+        let mut p = project(false);
+        p.signals = vec![ParsedSignal {
+            name: "A".into(),
+            address_extension: 3,
+            ..Default::default()
+        }];
+        let cmds = build_init_commands(&p, &one_daq_list());
+        let writes: Vec<&[u8]> = cmds
+            .iter()
+            .filter(|c| c.bytes[0] == WRITE_DAQ)
+            .map(|c| c.bytes.as_slice())
+            .collect();
+        assert_eq!(writes[0][3], 3, "A: extension from its MEASUREMENT");
+        assert_eq!(writes.last().unwrap()[3], 0, "B: undeclared means 0");
     }
 
     #[test]

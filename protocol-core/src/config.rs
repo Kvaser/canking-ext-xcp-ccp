@@ -65,6 +65,7 @@ impl Config {
                 lower_limit: 0.0,
                 upper_limit: 8000.0,
                 ecu_address: 0x1000,
+                address_extension: 0,
                 size: 2,
                 bit_mask: None,
                 byte_order: Some(ByteOrder::MsbLast),

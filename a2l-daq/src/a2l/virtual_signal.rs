@@ -176,6 +176,7 @@ pub(super) fn resolve_virtual_signals(project: &mut A2lProject) -> Vec<RejectedV
 
         sig.virtual_inputs = vec![input_name];
         sig.ecu_address = input.ecu_address;
+        sig.address_extension = input.address_extension;
         sig.size = input.size;
         sig.is_signed = input.is_signed;
         sig.is_float = input.is_float;

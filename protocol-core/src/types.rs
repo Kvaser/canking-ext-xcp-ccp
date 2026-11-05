@@ -32,6 +32,8 @@ pub struct ParsedSignal {
     pub lower_limit: f64,
     pub upper_limit: f64,
     pub ecu_address: u64,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub address_extension: u8,
     pub size: u16,
     pub bit_mask: Option<u64>,
     pub byte_order: Option<ByteOrder>,

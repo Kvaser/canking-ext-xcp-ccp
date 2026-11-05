@@ -27,7 +27,8 @@
 //! - GET_SEED/UNLOCK are marked optional: many ecu:s don't implement them at all, and a development ECU with no real security algorithm typically accepts any key,
 //!  so UNLOCK is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built
 
-use crate::types::{A2lProject, ByteOrder, DaqList, DaqListDef, EventEntry};
+use crate::types::{A2lProject, ByteOrder, DaqList, DaqListDef, EventEntry, ParsedSignal};
+use std::collections::HashMap;
 
 // The command/phase/response types are shared across protocols and live in
 // [`crate::protocol`]; the XCP-prefixed names are kept as aliases.
@@ -45,6 +46,7 @@ struct Ctx<'a> {
     events: &'a [EventEntry],
     daq_defs: &'a [DaqListDef],
     frame_len: Option<usize>,
+    signals: HashMap<&'a str, &'a ParsedSignal>,
 }
 
 impl Ctx<'_> {
@@ -134,6 +136,7 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
                 _ if t.max_dlc_required => Some(8),
                 _ => None,
             }),
+        signals: crate::layout::signal_lookup(project),
     }
 }
 
@@ -288,10 +291,11 @@ fn phase_write_entries(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqLi
                 let label = entry.names.join("/");
                 let addr = entry.ecu_address as u32;
                 let a = dword(addr, ctx.big_endian);
+                let ext = crate::layout::address_extension(&ctx.signals, entry);
                 push(
                     cmds,
                     XcpPhase::WriteEntries,
-                    vec![0xE1, 0xFF, entry.size as u8, 0x00, a[0], a[1], a[2], a[3]],
+                    vec![0xE1, 0xFF, entry.size as u8, ext, a[0], a[1], a[2], a[3]],
                     format!(
                         "WRITE_DAQ  {} size={} addr=0x{:08X}",
                         label, entry.size, addr
@@ -649,6 +653,24 @@ mod tests {
         assert_eq!(&id_be[2..4], &[0x01, 0x02], "big-endian list index");
         assert_eq!(&id_le[4..8], &ASSIGNED_CAN_ID.to_le_bytes());
         assert_eq!(&id_be[4..8], &ASSIGNED_CAN_ID.to_be_bytes());
+    }
+
+    #[test]
+    fn write_daq_carries_the_signal_address_extension() {
+        let mut p = project(DaqMode::Dynamic, vec![], 0);
+        p.signals = vec![ParsedSignal {
+            name: "A".into(),
+            address_extension: 3,
+            ..Default::default()
+        }];
+        let cmds = build_init_commands(&p, &one_daq_list(0));
+        let writes: Vec<&[u8]> = cmds
+            .iter()
+            .filter(|c| c.bytes[0] == 0xE1)
+            .map(|c| c.bytes.as_slice())
+            .collect();
+        assert_eq!(writes[0][3], 3, "A: extension from its MEASUREMENT");
+        assert_eq!(writes.last().unwrap()[3], 0, "B: undeclared means 0");
     }
 
     #[test]

@@ -80,6 +80,7 @@ fn parse_measurement_block(name: &str, tokens: &[String]) -> Option<ParsedSignal
     pos += 1;
 
     let mut ecu_address: Option<u64> = None;
+    let mut address_extension: u8 = 0;
     let mut bit_mask: Option<u64> = None;
     let mut byte_order: Option<ByteOrder> = None;
     let mut array_size: Option<u16> = None;
@@ -90,6 +91,14 @@ fn parse_measurement_block(name: &str, tokens: &[String]) -> Option<ParsedSignal
         match tokens[pos].as_str() {
             "ECU_ADDRESS" => {
                 ecu_address = tokens.get(pos + 1).and_then(|t| parse_u64_token(t));
+                pos += 2;
+            }
+            "ECU_ADDRESS_EXTENSION" => {
+                address_extension = tokens
+                    .get(pos + 1)
+                    .and_then(|t| parse_u64_token(t))
+                    .and_then(|v| u8::try_from(v).ok())
+                    .unwrap_or(0);
                 pos += 2;
             }
             "BIT_MASK" => {
@@ -170,6 +179,7 @@ fn parse_measurement_block(name: &str, tokens: &[String]) -> Option<ParsedSignal
         lower_limit,
         upper_limit,
         ecu_address,
+        address_extension,
         size,
         byte_order,
         bit_mask,
