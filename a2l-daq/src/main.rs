@@ -304,6 +304,15 @@ fn prompt_tscript_config(
     } else {
         None
     };
+    // 0 is no limit / no watchdog
+    let max_captures = timer_ms
+        .map(|_| prompt_parse("  Captures before DAQ stops (0 = no limit) [0]: ", 0u32))
+        .filter(|&n| n > 0);
+    let daq_watchdog_ms = Some(prompt_parse(
+        "Restart the DAQ init after this many ms without a DAQ frame (0 = never) [10000]: ",
+        10_000u32,
+    ))
+    .filter(|&ms| ms > 0);
 
     // Collect all (sanitized_name, original_name, pid) for display.
     let mut signal_pids: Vec<(String, String, u16)> = Vec::new();
@@ -425,6 +434,8 @@ fn prompt_tscript_config(
         .unwrap_or_default();
 
     TScriptConfig {
+        max_captures,
+        daq_watchdog_ms,
         channels: vec![CanChannel {
             index: channel_index,
             bitrate,

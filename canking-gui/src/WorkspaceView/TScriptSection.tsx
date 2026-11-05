@@ -1,5 +1,5 @@
 import { Box, Checkbox, FormControlLabel, TextField, Typography } from '@mui/material';
-import { parseNonNegativeInt, TScriptOptions } from './util';
+import { DEFAULT_TSCRIPT_OPTIONS, parseNonNegativeInt, parseOptionalPositiveInt, TScriptOptions } from './util';
 
 export interface TScriptSectionProps {
   options: TScriptOptions;
@@ -17,6 +17,10 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
   const channelError = parseNonNegativeInt(options.channelIndex) === null;
   const pretriggerError = parseNonNegativeInt(options.pretriggerMs) === null;
   const timerError = options.timerStop && parseNonNegativeInt(options.timerMs) === null;
+  const maxCaptures = options.maxCaptures ?? DEFAULT_TSCRIPT_OPTIONS.maxCaptures ?? '';
+  const watchdogMs = options.watchdogMs ?? DEFAULT_TSCRIPT_OPTIONS.watchdogMs ?? '';
+  const capturesError = options.timerStop && parseOptionalPositiveInt(maxCaptures) === null;
+  const watchdogError = parseOptionalPositiveInt(watchdogMs) === null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, my: 1 }}>
@@ -57,6 +61,37 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
           onChange={e => patch({ timerMs: e.target.value })}
           sx={{ width: 160 }}
         />
+        <TextField
+          size="small"
+          label="Captures"
+          placeholder="no limit"
+          value={maxCaptures}
+          disabled={!options.timerStop}
+          error={capturesError}
+          helperText={capturesError ? 'A number from 1, or blank' : undefined}
+          onChange={e => patch({ maxCaptures: e.target.value })}
+          sx={{ width: 160 }}
+        />
+      </Box>
+      <Typography variant="caption" color="text.secondary">
+        With a timer, each capture logs for the timer&apos;s length. The next one starts when the trigger condition has
+        been false and turns true again, while DAQ keeps running. After the last capture the script stops DAQ.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TextField
+          size="small"
+          label="Restart DAQ after silence (ms)"
+          placeholder="never"
+          value={watchdogMs}
+          error={watchdogError}
+          helperText={watchdogError ? 'A number from 1, or blank' : undefined}
+          onChange={e => patch({ watchdogMs: e.target.value })}
+          sx={{ width: 240 }}
+        />
+        <Typography variant="caption" color="text.secondary" sx={{ flex: 1, minWidth: 240 }}>
+          If no DAQ frame arrives for this long, e.g. after the ECU restarts, the script runs the DAQ init again. A
+          failed init always starts over after 5 s.
+        </Typography>
       </Box>
       <FormControlLabel
         control={

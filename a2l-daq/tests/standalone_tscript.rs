@@ -39,6 +39,8 @@ fn build_script(triggers: &[(&str, &str, &str)]) -> String {
         .collect();
 
     let config = TScriptConfig {
+        max_captures: Some(3),
+        daq_watchdog_ms: Some(2000),
         channels: vec![CanChannel {
             index: 0,
             bitrate: 500_000,
@@ -196,6 +198,8 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         })
         .collect();
     let config = TScriptConfig {
+        max_captures: None,
+        daq_watchdog_ms: None,
         channels: vec![CanChannel {
             index: 0,
             bitrate: 500_000,
@@ -302,6 +306,8 @@ fn daq_init_compiles_with_thousands_of_states() {
 
     let can_id = a2l_daq::layout::daq_can_id(&project, protocol).expect("DAQ CAN id");
     let config = TScriptConfig {
+        max_captures: None,
+        daq_watchdog_ms: None,
         channels: vec![CanChannel {
             index: 0,
             bitrate: 500_000,

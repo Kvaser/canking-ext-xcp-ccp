@@ -29,6 +29,8 @@ export const DEFAULT_TSCRIPT_OPTIONS: TScriptOptions = {
   pretriggerMs: '200',
   timerStop: false,
   timerMs: '8000',
+  maxCaptures: '',
+  watchdogMs: '10000',
   standalone: false,
   bus: {
     enabled: false,
@@ -76,6 +78,10 @@ export interface TScriptOptions {
   pretriggerMs: string;
   timerStop: boolean;
   timerMs: string;
+  /** With the timer: captures before DAQ stops; blank for no limit. Absent in projects saved before 1.1. */
+  maxCaptures?: string;
+  /** Restart the DAQ init after this many ms without a DAQ frame; blank to never. Absent before 1.1. */
+  watchdogMs?: string;
   standalone?: boolean;
   bus: BusOverride;
 }
@@ -88,6 +94,15 @@ export function parseNonNegativeInt(text: string): number | null {
   }
   const value = Number.parseInt(trimmed, 10);
   return Number.isSafeInteger(value) ? value : null;
+}
+
+/** An optional count typed by the user: blank is undefined; null unless it is a whole number of at least 1. */
+export function parseOptionalPositiveInt(text: string): number | undefined | null {
+  if (text.trim() === '') {
+    return undefined;
+  }
+  const value = parseNonNegativeInt(text);
+  return value !== null && value >= 1 ? value : null;
 }
 
 /** A DAQ list prescaler typed by the user: blank is 1; null unless it is a whole number from 1 to `max`. */

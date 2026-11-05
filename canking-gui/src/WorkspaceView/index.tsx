@@ -39,6 +39,7 @@ import {
   formatBitrate,
   parseCanId,
   parseNonNegativeInt,
+  parseOptionalPositiveInt,
   parsePrescaler,
   readA2lText,
   SignalEventMap,
@@ -293,7 +294,19 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
       const channelIndex = parseNonNegativeInt(tscriptOptions.channelIndex);
       const pretriggerMs = parseNonNegativeInt(tscriptOptions.pretriggerMs);
       const timerMs = tscriptOptions.timerStop ? parseNonNegativeInt(tscriptOptions.timerMs) : undefined;
-      if (channelIndex === null || pretriggerMs === null || timerMs === null) {
+      const maxCaptures = tscriptOptions.timerStop
+        ? parseOptionalPositiveInt(tscriptOptions.maxCaptures ?? DEFAULT_TSCRIPT_OPTIONS.maxCaptures ?? '')
+        : undefined;
+      const daqWatchdogMs = parseOptionalPositiveInt(
+        tscriptOptions.watchdogMs ?? DEFAULT_TSCRIPT_OPTIONS.watchdogMs ?? '',
+      );
+      if (
+        channelIndex === null ||
+        pretriggerMs === null ||
+        timerMs === null ||
+        maxCaptures === null ||
+        daqWatchdogMs === null
+      ) {
         setTscript('');
         warningLines.push('t-script not generated: invalid t-script options (see the T-script section)');
       } else {
@@ -307,6 +320,8 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
               channelIndex,
               pretriggerMs,
               timerMs,
+              maxCaptures,
+              daqWatchdogMs,
               conditions: conditions
                 .filter(c => c.signal !== '')
                 .map(c => ({

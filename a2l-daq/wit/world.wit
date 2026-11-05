@@ -245,6 +245,11 @@ interface generator {
     pretrigger-ms: u32,
     /// Stop logging this many ms after the trigger fires (none = no timer).
     timer-ms: option<u32>,
+    /// With `timer-ms`: stop DAQ after this many captures (none = no limit). A capture starts each time
+    /// the trigger condition turns from false to true.
+    max-captures: option<u32>,
+    /// Start the DAQ init over when no DAQ frame arrives for this many ms (none = never).
+    daq-watchdog-ms: option<u32>,
     /// Start-logger trigger conditions; empty = no signal trigger.
     conditions: list<trigger-condition>,
     /// Manual bus-parameter override; none = derive bus params from the A2L.

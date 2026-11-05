@@ -56,6 +56,8 @@ pub(super) fn init_config(
     stop: Vec<Command>,
 ) -> TScriptConfig {
     TScriptConfig {
+        max_captures: None,
+        daq_watchdog_ms: None,
         channels: vec![CanChannel {
             index: 0,
             bitrate: 500_000,
@@ -153,6 +155,8 @@ pub(super) fn standalone_config(can_id: u32, extended: bool) -> TScriptConfig {
     )
     .expect("decoders build");
     TScriptConfig {
+        max_captures: None,
+        daq_watchdog_ms: None,
         channels: vec![CanChannel {
             index: 0,
             bitrate: 500_000,

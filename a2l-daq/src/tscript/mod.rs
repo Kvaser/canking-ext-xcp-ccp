@@ -45,6 +45,10 @@ pub struct TScriptConfig {
     pub signals: Vec<SignalHook>,
     /// Stop logging this many ms after the trigger fires. `None` leaves the logger running.
     pub timer_ms: Option<u32>,
+    /// With `timer_ms`: stop DAQ after this many captures. `None` keeps capturing.
+    pub max_captures: Option<u32>,
+    /// Start the DAQ init over when no DAQ frame arrives for this many ms. `None` disables the watchdog.
+    pub daq_watchdog_ms: Option<u32>,
     /// The DAQ initialisation state machine to drive, when the script is to bring the ECU up itself.
     pub daq_init: Option<DaqInit>,
     pub can_fd: bool,

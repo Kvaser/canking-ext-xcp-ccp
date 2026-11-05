@@ -187,6 +187,8 @@ impl bindings::Guest for Component {
             pretrigger_ms: options.pretrigger_ms,
             signals,
             timer_ms: options.timer_ms,
+            max_captures: options.max_captures,
+            daq_watchdog_ms: options.daq_watchdog_ms,
             daq_init: crate::build_daq_init(
                 proto,
                 &project,
