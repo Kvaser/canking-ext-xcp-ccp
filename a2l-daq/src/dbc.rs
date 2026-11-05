@@ -175,14 +175,14 @@ pub fn create_dbc_file(
                 .conversion
                 .as_ref()
                 .and_then(|c| project.compu_methods.get(&c.identifier))
+                && !cm.text_table.is_empty()
+                && val_table_emitted.insert(sig.name.clone())
             {
-                if !cm.text_table.is_empty() && val_table_emitted.insert(sig.name.clone()) {
-                    val_tables.push_str(&format_val_table(
-                        msg_id,
-                        &sanitize_name(&placement.name),
-                        cm,
-                    ));
-                }
+                val_tables.push_str(&format_val_table(
+                    msg_id,
+                    &sanitize_name(&placement.name),
+                    cm,
+                ));
             }
         }
 

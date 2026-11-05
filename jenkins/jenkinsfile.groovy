@@ -57,7 +57,7 @@ pipeline {
                         }
                     }
                     steps {
-                        sh './run.sh rust wasm gui stage'
+                        sh './run.sh lint rust wasm gui stage'
                         
                         stash includes: 'canking-gui/dist/**,canking-gui/src/a2l-daq-wasm/**', name: 'dist-gui'
                         stash includes: 'canking-service/dist/**', name: 'dist-service'

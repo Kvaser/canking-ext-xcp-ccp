@@ -30,7 +30,7 @@
 //!   before its `WRITE_DAQ`. When the slave declares `BYTES_ONLY`, each multi-byte signal is registered as consecutive 1-byte `WRITE_DAQ`s
 //! - `GET_DAQ_SIZE` both clears the DAQ list and reports its size and first PID which the first PID is carried back in CRM byte 4.
 //! - `GET_SEED`/`UNLOCK` are marked optional not every slave implements them, and a development ECU with no real security algorithm typically accepts any key,
-//! so `UNLOCK` is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built.
+//!   so `UNLOCK` is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built.
 //!
 //! Address extension is emitted as 0 for now
 

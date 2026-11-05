@@ -140,10 +140,9 @@ pub(super) fn scan_protocols(tokens: &[String]) -> Vec<Protocol> {
             if let Some(p) = tokens
                 .get(i + 2)
                 .and_then(|t| Protocol::from_if_data_tag(t))
+                && let Some(idx) = Protocol::ALL.iter().position(|&q| q == p)
             {
-                if let Some(idx) = Protocol::ALL.iter().position(|&q| q == p) {
-                    present[idx] = true;
-                }
+                present[idx] = true;
             }
             i += 3;
         } else {

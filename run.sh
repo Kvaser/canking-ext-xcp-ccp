@@ -7,6 +7,7 @@
 #   ./run.sh [group ...]
 #
 # Groups:
+#   lint     rustfmt and clippy (-D warnings) in every build configuration, eslint and prettier for canking-gui
 #   rust     cargo tests (workspace defaults, protocol-core+serde, a2l-daq serde without tscript)
 #            + a2l-daq-cli release build
 #   wasm     wasm32-wasip2 component builds (a2l-daq, daq-decoder)
@@ -18,7 +19,7 @@
 #            picks up dist/bundle.p7s if a signing step dropped one in there.
 #   ck-cli   end-to-end tests against a running CanKing service via the ck CLI (see tests/ck-cli/README.md).
 #            Needs the wasm transpiled first. Individual tests skip when their prerequisites are absent.
-#   all      every build task above (default)
+#   all      lint and every build task above (default)
 
 set -u
 cd "$(dirname "$0")"
@@ -230,6 +231,20 @@ service_pack() {
         THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt user-guide.md UserGuide.html
 }
 
+gui_lint() {
+    cd canking-gui
+    [ -d node_modules ] || npm ci
+    npm run lint
+}
+
+lint_group() {
+    step "rustfmt" cargo fmt --all --check
+    step "clippy (workspace, all targets)"         cargo clippy --workspace --all-targets -- -D warnings
+    step "clippy a2l-daq (cli: serde, no default features)"         cargo clippy -p a2l-daq --all-targets --no-default-features --features serde -- -D warnings
+    step "clippy a2l-daq (wasm component)"         cargo clippy -p a2l-daq --lib --target wasm32-wasip2 --no-default-features --features component -- -D warnings
+    step "eslint + prettier (canking-gui)" gui_lint
+}
+
 rust_group() {
     step "cargo test (workspace, default features)" \
         cargo test --workspace
@@ -275,20 +290,21 @@ ck_cli_group() {
 }
 
 usage() {
-    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
 [ $# -eq 0 ] && set -- all
 for group in "$@"; do
     case "$group" in
+        lint) lint_group ;;
         rust) rust_group ;;
         wasm) wasm_group ;;
         gui)  gui_group ;;
         stage) stage_group ;;
         pack) pack_group ;;
         ck-cli) ck_cli_group ;;
-        all)  rust_group; wasm_group; gui_group; stage_group; pack_group ;;
+        all)  lint_group; rust_group; wasm_group; gui_group; stage_group; pack_group ;;
         -h|--help) usage 0 ;;
         *) echo "Unknown group: $group"; usage 1 ;;
     esac

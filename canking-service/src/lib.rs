@@ -130,20 +130,20 @@ impl bindings::exports::canking::data_processor::extension_base::Guest for DaqCo
         let mut state = STATE.write().unwrap();
         state.reset_measurement();
 
-        if let Some(corrections) = state.decoder.as_ref().map(Decoder::corrections) {
-            if !corrections.is_empty() {
-                let listing = corrections
-                    .iter()
-                    .map(|(id, configured, in_force)| {
-                        format!("list {id}: 0x{configured:02X} -> 0x{in_force:02X}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                log_msg(
-                    format!("decoding with the PIDs learned from the ECU ({listing})"),
-                    LogSeverity::Information,
-                );
-            }
+        if let Some(corrections) = state.decoder.as_ref().map(Decoder::corrections)
+            && !corrections.is_empty()
+        {
+            let listing = corrections
+                .iter()
+                .map(|(id, configured, in_force)| {
+                    format!("list {id}: 0x{configured:02X} -> 0x{in_force:02X}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            log_msg(
+                format!("decoding with the PIDs learned from the ECU ({listing})"),
+                LogSeverity::Information,
+            );
         }
 
         match state.commit_output_channel() {

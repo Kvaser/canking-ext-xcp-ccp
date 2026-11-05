@@ -34,16 +34,16 @@ pub(crate) fn consume_response(data: &[u8], positive: bool) {
     let report = proto.daq_list_report(data);
     let odts = state.decoder.as_ref().and_then(|d| d.odt_count(daq_index));
 
-    if let (Some(reported), Some(configured)) = (report.odt_count, odts) {
-        if (reported as usize) < configured {
-            log_msg(
-                format!(
-                    "{label} reports {reported} ODT(s) but the configuration \
+    if let (Some(reported), Some(configured)) = (report.odt_count, odts)
+        && (reported as usize) < configured
+    {
+        log_msg(
+            format!(
+                "{label} reports {reported} ODT(s) but the configuration \
                      fills {configured}; the surplus will not be measured"
-                ),
-                LogSeverity::Warning,
-            );
-        }
+            ),
+            LogSeverity::Warning,
+        );
     }
 
     let Some(first_pid) = report.first_pid else {

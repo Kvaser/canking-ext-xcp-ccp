@@ -490,10 +490,10 @@ mod tests {
     #[test]
     fn missing_can_id_slave_is_fatal() {
         let mut project = parse_a2l(A2L, &[]).unwrap();
-        if let Some(x) = project.xcp_data.as_mut() {
-            if let Some(c) = x.xcp_info.as_mut() {
-                c.can_id_slave = None;
-            }
+        if let Some(x) = project.xcp_data.as_mut()
+            && let Some(c) = x.xcp_info.as_mut()
+        {
+            c.can_id_slave = None;
         }
         let err = build(&mut project, &[], Protocol::Xcp, "test.a2l").unwrap_err();
         assert_eq!(err, DbcError::MissingCanIdSlave);

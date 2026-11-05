@@ -228,6 +228,7 @@ function SignalTable({ signals, groups, signalEvents, onSignalEventsChange }: Si
 
   // Renders only the rows scrolled into view.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line react-hooks/incompatible-library -- only matters with the React Compiler, which this build doesn't use
   const rowVirtualizer = useVirtualizer({
     count: sorted.length,
     getScrollElement: () => scrollRef.current,

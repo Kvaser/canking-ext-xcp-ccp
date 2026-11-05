@@ -25,7 +25,7 @@
 //!   user-assigned id; everything else (no override, a `FIXED` A2L id, or a `Dynamic` list left on its fallback) keeps transmitting
 //!   on the transport's shared default id, unchanged.
 //! - GET_SEED/UNLOCK are marked optional: many ecu:s don't implement them at all, and a development ECU with no real security algorithm typically accepts any key,
-//!  so UNLOCK is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built
+//!   so UNLOCK is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built
 
 use crate::types::{A2lProject, ByteOrder, DaqList, DaqListDef, EventEntry, ParsedSignal};
 use std::collections::HashMap;

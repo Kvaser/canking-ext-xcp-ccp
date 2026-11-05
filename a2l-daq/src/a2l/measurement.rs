@@ -19,10 +19,8 @@ pub(super) fn parse_measurements(tokens: &[String], selected: &[&str]) -> Vec<Pa
             i += 1;
             let block = extract_block(tokens, &mut i);
             let include = selected.is_empty() || selected.iter().any(|&s| s == name);
-            if include {
-                if let Some(signal) = parse_measurement_block(&name, block) {
-                    signals.push(signal);
-                }
+            if include && let Some(signal) = parse_measurement_block(&name, block) {
+                signals.push(signal);
             }
         } else {
             i += 1;

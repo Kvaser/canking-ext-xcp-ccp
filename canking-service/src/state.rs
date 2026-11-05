@@ -241,17 +241,19 @@ mod tests {
 
     #[test]
     fn pending_command_is_optional_reflects_the_matched_frame() {
-        let mut state = State::default();
-        state.init_frames = vec![
-            CommandFrame {
-                optional: false,
-                ..command_frame()
-            },
-            CommandFrame {
-                optional: true,
-                ..command_frame()
-            },
-        ];
+        let mut state = State {
+            init_frames: vec![
+                CommandFrame {
+                    optional: false,
+                    ..command_frame()
+                },
+                CommandFrame {
+                    optional: true,
+                    ..command_frame()
+                },
+            ],
+            ..State::default()
+        };
 
         assert!(
             !state.pending_command_is_optional(&[0xFE]),
@@ -288,8 +290,10 @@ mod tests {
 
     #[test]
     fn commit_output_channel_reselects_against_known_channels() {
-        let mut state = State::default();
-        state.channels = vec![channel(3, ChannelProtocol::Can)];
+        let mut state = State {
+            channels: vec![channel(3, ChannelProtocol::Can)],
+            ..State::default()
+        };
 
         let chosen = state.commit_output_channel();
 
@@ -306,9 +310,11 @@ mod tests {
 
     #[test]
     fn frames_to_queue_on_start_requires_start_daq_frames_and_channel() {
-        let mut state = State::default();
-        state.init_frames = vec![command_frame()];
-        state.output_channel = Some(7);
+        let mut state = State {
+            init_frames: vec![command_frame()],
+            output_channel: Some(7),
+            ..State::default()
+        };
         assert!(
             state.frames_to_queue_on_start().is_none(),
             "start_daq is false"
@@ -332,9 +338,11 @@ mod tests {
 
     #[test]
     fn frames_to_send_on_stop_requires_start_daq_frames_and_channel() {
-        let mut state = State::default();
-        state.stop_frames = vec![command_frame()];
-        state.output_channel = Some(7);
+        let mut state = State {
+            stop_frames: vec![command_frame()],
+            output_channel: Some(7),
+            ..State::default()
+        };
         assert!(
             state.frames_to_send_on_stop().is_none(),
             "start_daq is false"
