@@ -103,6 +103,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
     let mut daq_lists = Vec::new();
     let mut events = Vec::new();
     let mut max_odt_entry_size: u16 = 0;
+    let mut odt_entry_granularity: u16 = 0;
     let mut timestamp_size: u16 = 0;
     let mut timestamp_fixed = false;
 
@@ -147,8 +148,16 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
                 _ => {} // PRESCALER_SUPPORTED, etc.
             }
         } else {
-            // Scan header-level tokens for the per-entry size keyword.
-            if tokens[i] == "GRANULARITY_ODT_ENTRY_SIZE_DAQ_BYTE" {
+            // Header-level `GRANULARITY_ODT_ENTRY_SIZE_DAQ_<unit> <MAX_ODT_ENTRY_SIZE_DAQ>`.
+            let granularity = match tokens[i].strip_prefix("GRANULARITY_ODT_ENTRY_SIZE_DAQ_") {
+                Some("BYTE") => Some(1),
+                Some("WORD") => Some(2),
+                Some("DWORD") => Some(4),
+                Some("DLONG") => Some(8),
+                _ => None,
+            };
+            if let Some(g) = granularity {
+                odt_entry_granularity = g;
                 if let Some(v) = tokens.get(i + 1).and_then(|t| parse_u16_token(t)) {
                     max_odt_entry_size = v;
                 }
@@ -164,6 +173,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
         timestamp_size,
         timestamp_fixed,
         min_daq,
+        odt_entry_granularity,
     };
     (daq_info, events)
 }
@@ -561,5 +571,36 @@ mod tests {
         );
         assert!(info.max_dlc_required);
         assert!(info.can_fd.unwrap().max_dlc_required);
+    }
+
+    #[test]
+    fn daq_header_gives_min_daq_granularity_and_max_entry_size() {
+        let parse = |header: &str| {
+            let a2l = format!(
+                "/begin IF_DATA XCP /begin DAQ {header} \
+                 /begin DAQ_LIST 0x0003 /end DAQ_LIST /end DAQ /end IF_DATA"
+            );
+            parse_if_data_xcp(&tokenize_checked(&a2l).unwrap())
+                .unwrap()
+                .daq_info
+        };
+
+        let d = parse(
+            "DYNAMIC 0x10 0x04 0x02 OPTIMISATION_TYPE_DEFAULT ADDRESS_EXTENSION_FREE \
+             IDENTIFICATION_FIELD_TYPE_ABSOLUTE GRANULARITY_ODT_ENTRY_SIZE_DAQ_WORD 0x06 NO_OVERLOAD_INDICATION",
+        );
+        assert_eq!(d.min_daq, 2);
+        assert_eq!(d.odt_entry_granularity, 2);
+        assert_eq!(
+            d.max_odt_entry_size, 6,
+            "read for every granularity, not just BYTE"
+        );
+
+        let d = parse("DYNAMIC");
+        assert_eq!(
+            d.min_daq, 0,
+            "a DAQ_LIST id must not be mistaken for MIN_DAQ"
+        );
+        assert_eq!(d.odt_entry_granularity, 0);
     }
 }

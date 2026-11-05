@@ -206,6 +206,8 @@ pub struct DaqInfo {
     pub timestamp_fixed: bool,
     #[cfg_attr(feature = "serde", serde(default))]
     pub min_daq: u16,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub odt_entry_granularity: u16,
 }
 
 /// A single event channel as declared in an `/begin EVENT` block.

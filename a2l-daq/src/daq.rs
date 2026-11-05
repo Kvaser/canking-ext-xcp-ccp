@@ -50,6 +50,10 @@ pub fn build_daq_list(
     let mode = daq_info.map(|d| d.mode).unwrap_or_default();
     let available_daq = daq_info.map(|d| d.daq_lists.clone()).unwrap_or_default();
     let max_odt_entry_size = daq_info.map(|d| d.max_odt_entry_size).unwrap_or(0);
+    let granularity = daq_info
+        .map(|d| d.odt_entry_granularity)
+        .unwrap_or(0)
+        .max(1);
     let timestamp_reserved = daq_info.map(|d| d.timestamp_size).unwrap_or(0);
 
     // A DAQ DTO frame carries one PID byte plus the ODT payload.
@@ -77,6 +81,7 @@ pub fn build_daq_list(
         odt_max_bytes,
         max_odt_entry_size,
         timestamp_reserved,
+        granularity,
     };
     if mode.is_static() {
         build_daq_list_static(project.signals.clone(), limits, available_daq, events)
@@ -143,6 +148,7 @@ fn build_daq_list_ccp(
                 odt_max_bytes: CCP_ODT_MAX_BYTES,
                 max_odt_entry_size: 0,
                 timestamp_reserved: 0,
+                granularity: 1,
             },
             &mut lists,
             &mut unplaced,
@@ -297,25 +303,33 @@ struct PackLimits {
     max_odt_entry_size: u16,
     /// Bytes the ECU prepends to the first ODT of each list, reserved out of its budget.
     timestamp_reserved: u16,
+    /// Every entry size must be a multiple of this (`GRANULARITY_ODT_ENTRY_SIZE_DAQ`, 1 = bytes).
+    granularity: u16,
 }
 
 impl PackLimits {
     /// Largest chunk one signal may be split into.
     fn split_max(&self) -> u16 {
-        if self.max_odt_entry_size > 0 {
+        self.floor(if self.max_odt_entry_size > 0 {
             self.max_odt_entry_size
         } else {
             self.odt_max_bytes
-        }
+        })
     }
 
     /// Largest entry two contiguous candidates may merge into.
     fn merge_max(&self) -> u16 {
-        if self.max_odt_entry_size > 0 {
+        self.floor(if self.max_odt_entry_size > 0 {
             self.odt_max_bytes.min(self.max_odt_entry_size)
         } else {
             self.odt_max_bytes
-        }
+        })
+    }
+
+    /// `n` rounded down to whole granules, at least one.
+    fn floor(&self, n: u16) -> u16 {
+        let g = self.granularity.max(1);
+        (n / g * g).max(g)
     }
 }
 
@@ -349,14 +363,14 @@ fn pack_event_group(
             0
         };
 
-        // Split oversized signals into chunks
+        // Split oversized signals into chunks of whole granules
         let candidates: Vec<Candidate> = group_signals
             .iter()
             .enumerate()
-            .flat_map(|(i, s)| split_signal(s, i, limits.split_max()))
+            .flat_map(|(i, s)| split_signal(s, i, limits.split_max(), limits.granularity.max(1)))
             .collect();
 
-        // Merge memory-contiguous candidates into single entries
+        // Merge candidates that touch or overlap in ECU memory into single entries
         let candidates = merge_contiguous(candidates, limits.merge_max());
 
         // First Fit Decreasing into ODTs, respecting both byte budget and entry count
@@ -404,51 +418,59 @@ fn assign_first_pids(lists: &mut [DaqList], pid_decls: &HashMap<u16, PidDecl>) {
 // ------------------------------- Packing helpers ------------------------------------------
 
 /// Split one signal into one or more `Candidate` entries.
-fn split_signal(signal: &ParsedSignal, signal_index: usize, max_size: u16) -> Vec<Candidate> {
+///
+/// A candidate covers whole granules: XCP requires every ODT entry's address and size to be multiples of `GRANULARITY_ODT_ENTRY_SIZE_DAQ`, 
+/// so the signal's range is widened to them and the layout finds it by address. 
+/// 
+/// `max_size` must itself be a multiple of `granularity`, which keeps every chunk boundary aligned.
+fn split_signal(
+    signal: &ParsedSignal,
+    signal_index: usize,
+    max_size: u16,
+    granularity: u16,
+) -> Vec<Candidate> {
     if signal.size == 0 {
         return vec![];
     }
-    if signal.size <= max_size {
-        return vec![Candidate {
-            names: vec![signal.name.clone()],
-            ecu_address: signal.ecu_address,
-            size: signal.size,
-            signal_index,
-        }];
+    let g = granularity as u64;
+    let start = signal.ecu_address / g * g;
+    let end = (signal.ecu_address + signal.size as u64).div_ceil(g) * g;
+    let candidate = |name: String, from: u64, to: u64| Candidate {
+        names: vec![name],
+        ecu_address: from,
+        size: (to - from) as u16,
+        signal_index,
+    };
+    if end - start <= max_size as u64 {
+        return vec![candidate(signal.name.clone(), start, end)];
     }
-    let mut chunks = Vec::new();
-    let mut remaining = signal.size;
-    let mut offset = 0u64;
-    let mut part = 0usize;
-    while remaining > 0 {
-        let chunk = remaining.min(max_size);
-        chunks.push(Candidate {
-            names: vec![format!("{}[{}]", signal.name, part)],
-            ecu_address: signal.ecu_address + offset,
-            size: chunk,
-            signal_index,
-        });
-        offset += chunk as u64;
-        remaining -= chunk;
-        part += 1;
-    }
-    chunks
+    (start..end)
+        .step_by(max_size as usize)
+        .enumerate()
+        .map(|(part, from)| {
+            let to = (from + max_size as u64).min(end);
+            candidate(format!("{}[{}]", signal.name, part), from, to)
+        })
+        .collect()
 }
 
-/// Merge candidates that are contiguous in ECU memory into a single entry,
+/// Merge candidates that touch or overlap in ECU memory into a single entry.
+/// 
+/// Granule-aligned candidates can overlap, e.g. two bytes inside one DWORD.
 fn merge_contiguous(mut candidates: Vec<Candidate>, max_size: u16) -> Vec<Candidate> {
     if candidates.is_empty() {
         return candidates;
     }
     // Sort by address
     candidates.sort_by_key(|c| c.ecu_address);
+    let end = |c: &Candidate| c.ecu_address + c.size as u64;
     let mut merged: Vec<Candidate> = Vec::new();
     let mut current = candidates.remove(0);
     for next in candidates {
-        let is_adjacent = current.ecu_address + current.size as u64 == next.ecu_address;
-        let fits = current.size + next.size <= max_size;
-        if is_adjacent && fits {
-            current.size += next.size;
+        let touches = next.ecu_address <= end(&current);
+        let merged_size = end(&current).max(end(&next)) - current.ecu_address;
+        if touches && merged_size <= max_size as u64 {
+            current.size = merged_size as u16;
             current.names.extend(next.names);
         } else {
             merged.push(current);
@@ -583,6 +605,7 @@ mod tests {
             odt_max_bytes,
             max_odt_entry_size,
             timestamp_reserved,
+            granularity: 1,
         }
     }
 
@@ -1519,5 +1542,93 @@ mod tests {
             "precondition: the tail chunk merged with Next"
         );
         assert_layout_matches_packing(&project, &lists);
+    }
+
+    #[test]
+    fn entries_are_whole_granules_and_still_decode_correctly() {
+        let sig = |name: &str, ecu_address, size| ParsedSignal {
+            name: name.into(),
+            ecu_address,
+            size,
+            event: Some("E".into()),
+            ..Default::default()
+        };
+        let mut xcp = xcp_with_daq_lists_and_entry_size(vec![unlimited_daq(0)], 6);
+        xcp.as_mut().unwrap().daq_info.odt_entry_granularity = 4;
+        let project = A2lProject {
+            signals: vec![
+                sig("Byte", 0x10, 1),
+                sig("Three", 0x20, 3),
+                sig("Big", 0x40, 9),  // split at floor(6, 4) = 4: 4 + 4 + 1
+                sig("Tail", 0x49, 2), // shares Big's last granule
+                sig("Odd", 0x51, 1),  // unaligned: sampled as the DWORD at 0x50
+                sig("PairA", 0x61, 1),
+                sig("PairB", 0x62, 1), // same DWORD as PairA
+                sig("Word", 0x72, 2),
+            ],
+            xcp_data: xcp,
+            ..Default::default()
+        };
+        let (lists, unplaced) = build_daq_list(&project, Protocol::Xcp);
+        assert!(unplaced.is_empty(), "{unplaced:?}");
+        let entries: Vec<&crate::OdtEntry> = lists
+            .iter()
+            .flat_map(|l| &l.odts)
+            .flat_map(|o| &o.entries)
+            .collect();
+        for e in &entries {
+            assert_eq!(
+                (e.ecu_address % 4, e.size % 4),
+                (0, 0),
+                "address and size in whole DWORDs: {e:?}"
+            );
+            assert!(e.size <= 4, "max entry 6 floors to one DWORD: {e:?}");
+        }
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.names == ["PairA", "PairB"] && e.ecu_address == 0x60),
+            "{entries:?}"
+        );
+        assert_layout_matches_packing(&project, &lists);
+    }
+
+    #[test]
+    fn unaligned_signal_wider_than_an_entry_is_split_on_granule_boundaries() {
+        let mut xcp = xcp_with_daq_lists_and_entry_size(vec![unlimited_daq(0)], 4);
+        xcp.as_mut().unwrap().daq_info.odt_entry_granularity = 4;
+        let project = A2lProject {
+            signals: vec![ParsedSignal {
+                name: "F".into(),
+                ecu_address: 0x102,
+                size: 4,
+                event: Some("E".into()),
+                ..Default::default()
+            }],
+            xcp_data: xcp,
+            ..Default::default()
+        };
+        let (lists, _) = build_daq_list(&project, Protocol::Xcp);
+        let mut entries: Vec<(u64, u16, Vec<String>)> = lists[0]
+            .odts
+            .iter()
+            .flat_map(|o| &o.entries)
+            .map(|e| (e.ecu_address, e.size, e.names.clone()))
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![
+                (0x100, 4, vec!["F[0]".to_string()]),
+                (0x104, 4, vec!["F[1]".to_string()])
+            ]
+        );
+        let p = protocol_core::layout::signal_placements(&project, &lists);
+        let chunk = |n: &str| p.iter().find(|p| p.name == n).unwrap().chunk_size;
+        assert_eq!(
+            (chunk("F[0]"), chunk("F[1]")),
+            (Some(2), Some(2)),
+            "each chunk is F's bytes in its DWORD"
+        );
     }
 }

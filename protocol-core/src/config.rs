@@ -82,6 +82,7 @@ impl Config {
                     timestamp_size: 0,
                     timestamp_fixed: false,
                     min_daq: 0,
+                    odt_entry_granularity: 1,
                 },
                 event_info: EventInfo {
                     events: vec![EventEntry {
