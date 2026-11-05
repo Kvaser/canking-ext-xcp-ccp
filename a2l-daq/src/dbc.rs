@@ -1,8 +1,8 @@
+use crate::Protocol;
 use crate::a2l::{A2lProject, ByteOrder, CompuMethod, ParsedSignal};
 use crate::daq::DaqList;
-use crate::layout::{daq_can_id, daq_layout, timestamp_bytes, Field, SignalPlacement};
+use crate::layout::{Field, SignalPlacement, daq_can_id, daq_layout, timestamp_bytes};
 use crate::traceability::traceability_lines;
-use crate::Protocol;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as FmtWrite};

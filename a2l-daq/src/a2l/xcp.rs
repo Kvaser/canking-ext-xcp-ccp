@@ -8,7 +8,7 @@ use super::{
 };
 
 /// Finds the module-level `/begin IF_DATA XCP /end IF_DATA` and returns the parsed `XcpData`
-/// 
+///
 /// Returns `None` if the file has no XCP interface at all.
 pub(super) fn parse_if_data_xcp(tokens: &[String]) -> Option<XcpData> {
     let mut fallback: Option<&[String]> = None;
@@ -179,7 +179,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
 }
 
 /// Parses a `/begin TIMESTAMP_SUPPORTED` block.
-/// 
+///
 /// Returns the timestamp width in bytes and whether `TIMESTAMP_FIXED` is set.
 fn parse_timestamp_supported(tokens: &[String]) -> (u16, bool) {
     let mut size = 0u16;

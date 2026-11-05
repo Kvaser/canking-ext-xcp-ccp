@@ -1,9 +1,9 @@
 use a2l_daq::{
-    build_daq_init, build_trigger, bus_defaults, dbc::sanitize_name, event_channels,
-    expand_signal_indices, generate_tscript, list_protocols, list_signal_names,
-    parse_a2l_with_rejects, pipeline, resolve_signal_hooks, A2lProject, CanChannel, DaqList,
-    MessageRef, Protocol, ResolvedTrigger, SignalHook, TScriptConfig, TriggerAction,
-    TriggerCondition, DEFAULT_INIT_TIMEOUT_MS,
+    A2lProject, CanChannel, DEFAULT_INIT_TIMEOUT_MS, DaqList, MessageRef, Protocol,
+    ResolvedTrigger, SignalHook, TScriptConfig, TriggerAction, TriggerCondition, build_daq_init,
+    build_trigger, bus_defaults, dbc::sanitize_name, event_channels, expand_signal_indices,
+    generate_tscript, list_protocols, list_signal_names, parse_a2l_with_rejects, pipeline,
+    resolve_signal_hooks,
 };
 use std::env;
 use std::fs;

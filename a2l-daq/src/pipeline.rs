@@ -7,10 +7,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
-use crate::a2l::{A2lProject, CanIdSource, RejectedVirtual, RejectedVirtualReason};
-use crate::daq::{build_daq_list, DaqList};
-use crate::dbc::{create_dbc_file, sanitize_name, DbcError};
 use crate::Protocol;
+use crate::a2l::{A2lProject, CanIdSource, RejectedVirtual, RejectedVirtualReason};
+use crate::daq::{DaqList, build_daq_list};
+use crate::dbc::{DbcError, create_dbc_file, sanitize_name};
 
 /// A non-fatal issue surfaced to the host so it can be shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,7 +255,7 @@ fn colliding_names(daq_lists: &[DaqList]) -> Vec<Diagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_a2l, parse_a2l_with_rejects, Protocol};
+    use crate::{Protocol, parse_a2l, parse_a2l_with_rejects};
 
     const A2L: &str = r#"
     /begin MEASUREMENT Rpm "Engine speed" UWORD Rpm_CM 0 0 0 8000 ECU_ADDRESS 0x1000 /end MEASUREMENT
@@ -310,10 +310,11 @@ mod tests {
         let mut project = parse_a2l(A2L, &[]).unwrap();
         let assignments = vec![("Task10ms".into(), vec!["Ghost".into()])];
         let out = build(&mut project, &assignments, Protocol::Xcp, "test.a2l").unwrap();
-        assert!(out
-            .warnings
-            .iter()
-            .any(|w| matches!(w, Diagnostic::UnknownSignal { name } if name == "Ghost")));
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| matches!(w, Diagnostic::UnknownSignal { name } if name == "Ghost"))
+        );
     }
 
     #[test]
@@ -411,10 +412,11 @@ mod tests {
         let mut project = parse_a2l(A2L, &[]).unwrap();
         let assignments = vec![("Task10ms".into(), vec!["Rpm".into()])];
         let out = build(&mut project, &assignments, Protocol::Xcp, "test.a2l").unwrap();
-        assert!(!out
-            .warnings
-            .iter()
-            .any(|w| matches!(w, Diagnostic::CollidingNames { .. })));
+        assert!(
+            !out.warnings
+                .iter()
+                .any(|w| matches!(w, Diagnostic::CollidingNames { .. }))
+        );
     }
 
     #[test]

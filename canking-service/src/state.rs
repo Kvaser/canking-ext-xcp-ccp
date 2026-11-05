@@ -253,9 +253,15 @@ mod tests {
             },
         ];
 
-        assert!(!state.pending_command_is_optional(&[0xFE]), "first command is mandatory");
+        assert!(
+            !state.pending_command_is_optional(&[0xFE]),
+            "first command is mandatory"
+        );
         state.record_answer(0);
-        assert!(state.pending_command_is_optional(&[0xFE]), "second command is optional");
+        assert!(
+            state.pending_command_is_optional(&[0xFE]),
+            "second command is optional"
+        );
     }
 
     #[test]

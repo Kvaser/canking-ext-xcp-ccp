@@ -4,7 +4,7 @@
 //! This module turns that into [`TriggerTerm`]s and then resolves them against the DAQ layout
 
 use super::inline_signals::{SignalDecoder, TriggerError};
-use super::trigger::{resolve_trigger, Accessor, CompareOp, Comparison, TriggerSignal};
+use super::trigger::{Accessor, CompareOp, Comparison, TriggerSignal, resolve_trigger};
 use crate::a2l::A2lProject;
 use crate::daq::DaqList;
 use std::error::Error;

@@ -65,11 +65,7 @@ impl ParsedSignal {
 
         let (raw_lo, raw_hi) = raw_range(bits, self.is_signed);
         let (a, b) = (raw_lo * factor + offset, raw_hi * factor + offset);
-        if a <= b {
-            (a, b)
-        } else {
-            (b, a)
-        }
+        if a <= b { (a, b) } else { (b, a) }
     }
 }
 

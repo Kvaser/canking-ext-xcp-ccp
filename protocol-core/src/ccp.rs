@@ -29,7 +29,7 @@
 //! - CCP 2.1 does not require the slave to post-increment its ODT-element pointer, so every element gets its own `SET_DAQ_PTR`
 //!   before its `WRITE_DAQ`. When the slave declares `BYTES_ONLY`, each multi-byte signal is registered as consecutive 1-byte `WRITE_DAQ`s
 //! - `GET_DAQ_SIZE` both clears the DAQ list and reports its size and first PID which the first PID is carried back in CRM byte 4.
-//! - `GET_SEED`/`UNLOCK` are marked optional not every slave implements them, and a development ECU with no real security algorithm typically accepts any key, 
+//! - `GET_SEED`/`UNLOCK` are marked optional not every slave implements them, and a development ECU with no real security algorithm typically accepts any key,
 //! so `UNLOCK` is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built.
 //!
 //! Address extension is emitted as 0 for now
@@ -37,10 +37,10 @@
 use crate::types::{A2lProject, ByteOrder, DaqList, EventEntry, ParsedSignal};
 use std::collections::HashMap;
 
-use crate::protocol::{dword, word};
 pub use crate::protocol::{
     Command as CcpCommand, ExpectedResponse as CcpResponse, Phase as CcpPhase,
 };
+use crate::protocol::{dword, word};
 
 // CCP 2.1 command codes.
 const CONNECT: u8 = 0x01;
@@ -450,7 +450,10 @@ mod tests {
         let get_seed = find(&cmds, GET_SEED);
         assert_eq!(get_seed.phase, CcpPhase::Connect);
         assert_eq!(&get_seed.bytes[2..], &[0x02, 0, 0, 0, 0, 0], "resource=DAQ");
-        assert!(get_seed.optional, "GET_SEED must not abort init if unsupported");
+        assert!(
+            get_seed.optional,
+            "GET_SEED must not abort init if unsupported"
+        );
 
         let unlock = find(&cmds, UNLOCK);
         assert_eq!(unlock.phase, CcpPhase::Connect);

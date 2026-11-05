@@ -23,9 +23,9 @@ mod state;
 
 use crate::calibration::consume_response;
 use crate::channels::validate_channel;
-use crate::config::{apply_config, Config, ConfigError};
+use crate::config::{Config, ConfigError, apply_config};
 use crate::decode::Decoder;
-use crate::definitions::{log_frame_definitions, PID_SIGNAL_NAME};
+use crate::definitions::{PID_SIGNAL_NAME, log_frame_definitions};
 use crate::logging::log_msg;
 use crate::state::STATE;
 use protocol_core::protocol::{self, ResponseType};

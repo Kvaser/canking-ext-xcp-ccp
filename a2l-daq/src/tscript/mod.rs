@@ -17,15 +17,15 @@ mod test_util;
 
 pub use emit::generate_tscript;
 pub use inline_signals::{
-    decoder_functions, decoders_for, helper_typedef, DecoderType, SignalDecoder, TriggerError,
+    DecoderType, SignalDecoder, TriggerError, decoder_functions, decoders_for, helper_typedef,
 };
 pub use trigger::{
-    dbc_trigger_signals, inline_trigger_signals, resolve_trigger, Accessor, CompareOp, Comparison,
-    TriggerAction, TriggerCondition, TriggerParts, TriggerSignal,
+    Accessor, CompareOp, Comparison, TriggerAction, TriggerCondition, TriggerParts, TriggerSignal,
+    dbc_trigger_signals, inline_trigger_signals, resolve_trigger,
 };
 pub use trigger_expr::{
-    build_trigger, expand_signal_indices, parse_terms, resolve_terms, ResolvedTrigger,
-    TriggerExprError, TriggerTerm,
+    ResolvedTrigger, TriggerExprError, TriggerTerm, build_trigger, expand_signal_indices,
+    parse_terms, resolve_terms,
 };
 
 use crate::a2l::A2lProject;

@@ -4,11 +4,11 @@
 //! Without one, the script has to do that itself: this module turns the [`crate::layout`] placements into
 //! `float sig_<name>(const byte data[])` functions plus the globals that latch their values.
 
+use crate::ByteOrder;
 use crate::a2l::A2lProject;
 use crate::daq::DaqList;
 use crate::dbc::sanitize_name;
-use crate::layout::{effective_bit_length, find_placement, signal_placements, SignalPlacement};
-use crate::ByteOrder;
+use crate::layout::{SignalPlacement, effective_bit_length, find_placement, signal_placements};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as FmtWrite};
 

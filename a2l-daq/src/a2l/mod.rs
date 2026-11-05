@@ -40,7 +40,7 @@ pub use protocol_core::types::{
 };
 
 pub use encoding::decode_a2l_bytes;
-pub use summary::{inspect, A2lSummary, GroupInfo, SignalSummary, TransportInfo};
+pub use summary::{A2lSummary, GroupInfo, SignalSummary, TransportInfo, inspect};
 pub use virtual_signal::{RejectedVirtual, RejectedVirtualReason};
 
 use tokenizer::{scan_events, scan_protocols, scan_signal_names, tokenize_checked};
@@ -185,8 +185,8 @@ fn parse_tokens(tokens: &[String], selected: Vec<&str>) -> (A2lProject, Vec<Reje
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_a2l_bytes, inspect, list_events, list_protocols, parse_a2l, parse_a2l_with_rejects,
         A2lParseError, A2lProject, Conversion, DaqMode, Protocol, RejectedVirtualReason,
+        decode_a2l_bytes, inspect, list_events, list_protocols, parse_a2l, parse_a2l_with_rejects,
     };
     const CCP_A2L: &[u8] = include_bytes!("../../data/CCP/SampleECU.a2l");
 
@@ -424,7 +424,10 @@ mod tests {
         /begin SEED_KEY "SeedNKeyXcp.dll" /end SEED_KEY
       /end IF_DATA
         "#;
-        let ccp = parse_a2l(after_tp_blob, &[]).unwrap().ccp_data.expect("ccp_data");
+        let ccp = parse_a2l(after_tp_blob, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
         assert_eq!(ccp.info.seed_key_dll.as_deref(), Some("SeedNKeyXcp.dll"));
 
         let before_tp_blob = r#"
@@ -433,7 +436,10 @@ mod tests {
         /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
       /end IF_DATA
         "#;
-        let ccp = parse_a2l(before_tp_blob, &[]).unwrap().ccp_data.expect("ccp_data");
+        let ccp = parse_a2l(before_tp_blob, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
         assert_eq!(ccp.info.seed_key_dll.as_deref(), Some("SeedNKeyXcp.dll"));
 
         let content = r#"

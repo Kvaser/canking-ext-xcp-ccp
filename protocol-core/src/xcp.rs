@@ -32,10 +32,10 @@ use std::collections::HashMap;
 
 // The command/phase/response types are shared across protocols and live in
 // [`crate::protocol`]; the XCP-prefixed names are kept as aliases.
-use crate::protocol::{dword, word};
 pub use crate::protocol::{
     Command as XcpCommand, ExpectedResponse as XcpResponse, Phase as XcpPhase,
 };
+use crate::protocol::{dword, word};
 
 /// Snapshot of everything the phase builders need from the parsed project.
 struct Ctx<'a> {
@@ -598,10 +598,11 @@ mod tests {
         assert_eq!(select.bytes[1], 0x02, "mode = select");
         assert_eq!(select.response, XcpResponse::FirstPid { daq_index: 0 });
 
-        assert!(cmds
-            .iter()
-            .filter(|c| c.bytes[0] != 0xDE)
-            .all(|c| c.response == XcpResponse::Ack));
+        assert!(
+            cmds.iter()
+                .filter(|c| c.bytes[0] != 0xDE)
+                .all(|c| c.response == XcpResponse::Ack)
+        );
         assert_eq!(cmds.last().unwrap().bytes, vec![0xDD, 0x01]);
     }
 
@@ -680,12 +681,23 @@ mod tests {
 
         let get_seed = cmds.iter().find(|c| c.bytes[0] == 0xF8).unwrap();
         assert_eq!(get_seed.phase, XcpPhase::Connect);
-        assert_eq!(get_seed.bytes, vec![0xF8, 0x00, 0x04], "mode=start, resource=DAQ");
-        assert!(get_seed.optional, "GET_SEED must not abort init if unsupported");
+        assert_eq!(
+            get_seed.bytes,
+            vec![0xF8, 0x00, 0x04],
+            "mode=start, resource=DAQ"
+        );
+        assert!(
+            get_seed.optional,
+            "GET_SEED must not abort init if unsupported"
+        );
 
         let unlock = cmds.iter().find(|c| c.bytes[0] == 0xF7).unwrap();
         assert_eq!(unlock.phase, XcpPhase::Connect);
-        assert_eq!(unlock.bytes, vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0], "6-byte zero key");
+        assert_eq!(
+            unlock.bytes,
+            vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0],
+            "6-byte zero key"
+        );
         assert!(unlock.optional, "UNLOCK must not abort init if unsupported");
 
         assert!(

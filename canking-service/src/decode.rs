@@ -1,8 +1,8 @@
 //! Runtime DAQ-frame decoder.
 
 use protocol_core::layout::{
-    daq_layout, effective_bit_length, resolve_signal, signal_lookup, timestamp_bytes, Field,
-    SignalPlacement,
+    Field, SignalPlacement, daq_layout, effective_bit_length, resolve_signal, signal_lookup,
+    timestamp_bytes,
 };
 use protocol_core::protocol::Protocol;
 use protocol_core::types::{A2lProject, ByteOrder, DaqList};

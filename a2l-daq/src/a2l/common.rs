@@ -1,8 +1,8 @@
 //! Parsing the module-level `/begin MOD_COMMON` block: project-wide defaults that
 //! apply regardless of which measurement protocol the file declares.
 
-use super::tokenizer::extract_block;
 use super::ByteOrder;
+use super::tokenizer::extract_block;
 
 /// Extracts the default byte order from the first `/begin MOD_COMMON` block found.
 pub(super) fn parse_mod_common(tokens: &[String]) -> Option<ByteOrder> {

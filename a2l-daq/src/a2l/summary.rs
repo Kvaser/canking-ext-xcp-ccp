@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use super::group::parse_groups;
 use super::tokenizer::{scan_protocols, tokenize_checked};
 use super::{
-    event_channels, parse_tokens, selected_refs, A2lParseError, EventEntry, Protocol,
-    RejectedVirtualReason,
+    A2lParseError, EventEntry, Protocol, RejectedVirtualReason, event_channels, parse_tokens,
+    selected_refs,
 };
 
 /// Per-signal metadata

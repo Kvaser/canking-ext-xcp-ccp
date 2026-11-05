@@ -1,7 +1,7 @@
 //! Rendering a [`TScriptConfig`] into `.t` source.
 
 use super::inline_signals;
-use super::trigger::{condition_expression, latch_block, latch_variables, TriggerSignal};
+use super::trigger::{TriggerSignal, condition_expression, latch_block, latch_variables};
 use super::{DaqInit, MessageRef, SignalHook, TScriptConfig};
 use protocol_core::protocol::BytePattern;
 use std::fmt::Write as FmtWrite;
@@ -10,11 +10,7 @@ const DAQ_INIT_MAX_RETRIES: u32 = 10;
 
 /// Per-channel identifier suffix
 fn channel_suffix(i: usize) -> String {
-    if i == 0 {
-        String::new()
-    } else {
-        i.to_string()
-    }
+    if i == 0 { String::new() } else { i.to_string() }
 }
 
 /// Generate the `.t` script content from a config.
@@ -178,7 +174,11 @@ fn daq_functions_block(config: &TScriptConfig, init: &DaqInit) -> String {
     if init.commands.iter().any(|c| c.optional) {
         out.push_str("int isOptionalState(int state) {\n");
         for (i, cmd) in init.commands.iter().enumerate().filter(|(_, c)| c.optional) {
-            let _ = writeln!(out, "    if (state == {i}) {{ return 1; }}  /* {} */", cmd.label);
+            let _ = writeln!(
+                out,
+                "    if (state == {i}) {{ return 1; }}  /* {} */",
+                cmd.label
+            );
         }
         out.push_str("    return 0;\n");
         out.push_str("}\n\n");
@@ -276,7 +276,10 @@ fn advance_state_lines(indent: &str, protocol_name: &str) -> String {
     let _ = writeln!(out, "{indent}    sendDaqCommand(init_state, master_id);");
     let _ = writeln!(out, "{indent}    timerStart(daqTimeout);");
     let _ = writeln!(out, "{indent}}} else {{");
-    let _ = writeln!(out, "{indent}    printf(\"{protocol_name} init complete\\n\");");
+    let _ = writeln!(
+        out,
+        "{indent}    printf(\"{protocol_name} init complete\\n\");"
+    );
     let _ = writeln!(out, "{indent}}}");
     out
 }
@@ -857,10 +860,7 @@ mod tests {
             vec![stop_cmd(vec![0xFE], "DISCONNECT")],
         ));
 
-        assert!(
-            t.contains("int isOptionalState(int state) {"),
-            "got:\n{t}"
-        );
+        assert!(t.contains("int isOptionalState(int state) {"), "got:\n{t}");
         assert!(
             t.contains("if (state == 1) { return 1; }  /* GET_SEED */"),
             "got:\n{t}"

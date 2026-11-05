@@ -1,6 +1,6 @@
 //! End-to-end tests
 #![cfg(feature = "tscript")]
-use a2l_daq::{build_daq_list, build_init_commands, create_dbc_file, parse_a2l, DaqMode, Protocol};
+use a2l_daq::{DaqMode, Protocol, build_daq_list, build_init_commands, create_dbc_file, parse_a2l};
 
 const STATIC_FD_A2L: &str = r#"
 /begin MEASUREMENT EngTemp

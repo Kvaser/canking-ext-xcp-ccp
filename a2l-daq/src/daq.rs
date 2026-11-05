@@ -420,9 +420,9 @@ fn assign_first_pids(lists: &mut [DaqList], pid_decls: &HashMap<u16, PidDecl>) {
 
 /// Split one signal into one or more `Candidate` entries.
 ///
-/// A candidate covers whole granules: XCP requires every ODT entry's address and size to be multiples of `GRANULARITY_ODT_ENTRY_SIZE_DAQ`, 
-/// so the signal's range is widened to them and the layout finds it by address. 
-/// 
+/// A candidate covers whole granules: XCP requires every ODT entry's address and size to be multiples of `GRANULARITY_ODT_ENTRY_SIZE_DAQ`,
+/// so the signal's range is widened to them and the layout finds it by address.
+///
 /// `max_size` must itself be a multiple of `granularity`, which keeps every chunk boundary aligned.
 fn split_signal(
     signal: &ParsedSignal,
@@ -457,7 +457,7 @@ fn split_signal(
 }
 
 /// Merge candidates that touch or overlap in ECU memory (same address extension) into a single entry.
-/// 
+///
 /// Granule-aligned candidates can overlap, e.g. two bytes inside one DWORD.
 fn merge_contiguous(mut candidates: Vec<Candidate>, max_size: u16) -> Vec<Candidate> {
     // Entries never mix extensions, but an ODT or DAQ list still may; enforce A2L `ADDRESS_EXTENSION_ODT`/`_DAQ` in packing if an ECU declares it.
@@ -559,12 +559,12 @@ fn pack_ffd(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_daq_list, build_daq_list_ccp, build_daq_list_static, build_daq_list_with_packing,
-        PackLimits,
+        PackLimits, build_daq_list, build_daq_list_ccp, build_daq_list_static,
+        build_daq_list_with_packing,
     };
     use crate::{
-        a2l::{CcpData, CcpSource, DaqInfo, EventEntry, EventInfo, ParsedSignal, XcpData},
         A2lProject, DaqListDef, DaqMode, Protocol,
+        a2l::{CcpData, CcpSource, DaqInfo, EventEntry, EventInfo, ParsedSignal, XcpData},
     };
 
     fn event(channel: u32, name: &str) -> EventEntry {
@@ -1283,9 +1283,11 @@ mod tests {
         assert_eq!(lists[1].id, 1);
         assert_eq!(lists[0].first_pid, 0);
         assert_eq!(lists[1].first_pid, lists[0].odts.len() as u16);
-        assert!(lists
-            .iter()
-            .any(|l| l.event.as_deref() == Some("DAQ_CHAN1")));
+        assert!(
+            lists
+                .iter()
+                .any(|l| l.event.as_deref() == Some("DAQ_CHAN1"))
+        );
     }
 
     #[test]

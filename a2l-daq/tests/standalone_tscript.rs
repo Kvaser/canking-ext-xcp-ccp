@@ -2,9 +2,9 @@
 #![cfg(feature = "tscript")]
 
 use a2l_daq::{
-    build_daq_init, decoders_for, generate_tscript, inline_trigger_signals, list_protocols,
-    pipeline, CanChannel, CompareOp, Comparison, MessageRef, SignalHook, TScriptConfig,
-    TriggerAction, TriggerCondition,
+    CanChannel, CompareOp, Comparison, MessageRef, SignalHook, TScriptConfig, TriggerAction,
+    TriggerCondition, build_daq_init, decoders_for, generate_tscript, inline_trigger_signals,
+    list_protocols, pipeline,
 };
 
 const SCC: &str = r"C:\Program Files (x86)\Kvaser\Canlib\Bin\scc.exe";

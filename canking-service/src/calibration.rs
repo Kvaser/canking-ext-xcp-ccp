@@ -5,7 +5,7 @@ use protocol_core::protocol::ExpectedResponse;
 use crate::bindings::canking::data_processor::types::LogSeverity;
 use crate::decode::PidUpdate;
 use crate::logging::log_msg;
-use crate::state::{State, STATE};
+use crate::state::{STATE, State};
 
 /// Account for a command response, and calibrate the decoder from it.
 pub(crate) fn consume_response(data: &[u8], positive: bool) {

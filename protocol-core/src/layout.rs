@@ -84,7 +84,7 @@ pub fn daq_can_id(project: &A2lProject, protocol: Protocol) -> Option<u32> {
 /// Group DAQ lists by the CAN id they actually transmit on, given the transport's shared default id. Ascending by id.
 ///
 /// Most lists share the module's default id, but a list may declare its own via XCP's `DAQ_LIST_CAN_ID` or CCP's `CAN_ID_FIXED` (see [`crate::types::CanIdSource`]).
-/// 
+///
 /// A caller that needs one message/hook per CAN id (the DBC writer, the standalone t-script generator) packs each group through the normal single-CAN-id layout pass.
 pub fn group_by_can_id(daq_lists: &[DaqList], default_id: u32) -> Vec<(u32, Vec<DaqList>)> {
     let mut groups: Vec<(u32, Vec<DaqList>)> = Vec::new();
@@ -130,8 +130,8 @@ pub fn resolve_signal<'a>(
     })
 }
 
-/// The `ECU_ADDRESS_EXTENSION` an entry is sampled with. 
-/// 
+/// The `ECU_ADDRESS_EXTENSION` an entry is sampled with.
+///
 /// Packing never merges signals with different extensions into one entry, so its first signal speaks for all of them.
 pub fn address_extension(signal_map: &HashMap<&str, &ParsedSignal>, entry: &OdtEntry) -> u8 {
     entry
@@ -186,7 +186,7 @@ pub fn daq_layout(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Field> {
                             .and_then(|base| signal_map.get(base))
                             .map(|s| (*s).clone())
                     };
-                    // A signal sits at its own address inside the entry, which may start earlier or hold other signals. 
+                    // A signal sits at its own address inside the entry, which may start earlier or hold other signals.
                     // A chunk is the part of its parent the entry covers.
                     let (signal, chunk_size, offset_in_entry) = match exact {
                         Some(sig) => {
