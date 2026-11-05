@@ -1,7 +1,7 @@
 //! Parsing the module-level `/begin IF_DATA ASAP1B_CCP ... /end IF_DATA` block: transport
 //! parameters (`TP_BLOB`), event rasters, and DAQ list sources (`SOURCE`/`QP_BLOB`).
 
-use super::tokenizer::{extract_block, parse_u16_token, parse_u32_token};
+use super::tokenizer::{extract_block, parse_can_id_token, parse_u16_token, parse_u32_token};
 use super::{CcpData, CcpInfo, CcpSource, EventEntry};
 
 /// Finds the module-level `IF_DATA ASAP1B_CCP` block and parses its contents.
@@ -162,7 +162,7 @@ fn parse_qp_blob(name: String, tokens: &[String]) -> Option<CcpSource> {
                 i += 2;
             }
             "CAN_ID_FIXED" => {
-                source.can_id = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                source.can_id = tokens.get(i + 1).and_then(|t| parse_can_id_token(t));
                 i += 2;
             }
             "RASTER" => {
@@ -189,8 +189,14 @@ fn parse_qp_blob(name: String, tokens: &[String]) -> Option<CcpSource> {
 /// baudrate, and whether BYTES_ONLY is set.
 fn parse_tp_blob(tokens: &[String]) -> CcpInfo {
     let version = tokens.first().and_then(|t| parse_u16_token(t)).unwrap_or(0);
-    let cro_id = tokens.get(2).and_then(|t| parse_u32_token(t)).unwrap_or(0);
-    let dto_id = tokens.get(3).and_then(|t| parse_u32_token(t)).unwrap_or(0);
+    let cro_id = tokens
+        .get(2)
+        .and_then(|t| parse_can_id_token(t))
+        .unwrap_or(0);
+    let dto_id = tokens
+        .get(3)
+        .and_then(|t| parse_can_id_token(t))
+        .unwrap_or(0);
     let station_address = tokens.get(4).and_then(|t| parse_u16_token(t)).unwrap_or(0);
 
     let mut baudrate = None;

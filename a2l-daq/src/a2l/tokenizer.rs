@@ -188,6 +188,11 @@ pub(super) fn parse_u32_token(token: &str) -> Option<u32> {
     parse_u64_token(token).and_then(|n| u32::try_from(n).ok())
 }
 
+/// A CAN id as the XCP/CCP `IF_DATA` blocks write it, where bit 31 flags an extended (29-bit) id.
+pub(super) fn parse_can_id_token(token: &str) -> Option<u32> {
+    parse_u32_token(token).map(|id| id & !0x8000_0000)
+}
+
 pub(super) fn parse_f64_token(value: &str) -> Option<f64> {
     value
         .parse::<f64>()

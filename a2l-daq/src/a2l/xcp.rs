@@ -1,7 +1,7 @@
 //! Parsing the module-level `/begin IF_DATA XCP ... /end IF_DATA` block: DAQ list
 //! capabilities, event channels, and the `XCP_ON_CAN` transport parameters.
 
-use super::tokenizer::{extract_block, parse_u16_token, parse_u32_token};
+use super::tokenizer::{extract_block, parse_can_id_token, parse_u16_token, parse_u32_token};
 use super::{
     ByteOrder, CanFdInfo, CanIdSource, DaqInfo, DaqListDef, DaqMode, EventEntry, EventInfo,
     Protocol, ProtocolLayerInfo, XcpData, XcpInfo,
@@ -264,15 +264,15 @@ fn parse_xcp_on_can(tokens: &[String]) -> (Option<XcpInfo>, Vec<(u16, CanIdSourc
     while i < tokens.len() {
         match tokens[i].as_str() {
             "CAN_ID_BROADCAST" => {
-                can_id_broadcast = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                can_id_broadcast = tokens.get(i + 1).and_then(|t| parse_can_id_token(t));
                 i += 2;
             }
             "CAN_ID_MASTER" => {
-                can_id_master = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                can_id_master = tokens.get(i + 1).and_then(|t| parse_can_id_token(t));
                 i += 2;
             }
             "CAN_ID_SLAVE" => {
-                can_id_slave = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                can_id_slave = tokens.get(i + 1).and_then(|t| parse_can_id_token(t));
                 i += 2;
             }
             "BAUDRATE" => {
@@ -321,7 +321,7 @@ fn parse_daq_list_can_id(tokens: &[String]) -> Option<(u16, CanIdSource)> {
     let source = match tokens.get(1).map(String::as_str) {
         Some("VARIABLE") => CanIdSource::Dynamic { assigned: None },
         Some("FIXED") => CanIdSource::Fixed {
-            id: parse_u32_token(tokens.get(2)?)?,
+            id: parse_can_id_token(tokens.get(2)?)?,
         },
         _ => return None,
     };

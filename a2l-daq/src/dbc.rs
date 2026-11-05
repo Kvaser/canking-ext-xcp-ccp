@@ -110,6 +110,7 @@ pub fn create_dbc_file(
     let mut fd_frame_formats = String::new();
 
     for (can_id, lists) in &groups {
+        let msg_id = dbc_message_id(*can_id);
         // DLC = max payload bytes of any single ODT on this CAN id + 1 for the PID byte.
         let max_odt_bytes: u16 = lists
             .iter()
@@ -128,7 +129,7 @@ pub fn create_dbc_file(
         };
 
         let name = message_name(*can_id, groups.len());
-        let _ = writeln!(out, "BO_ {can_id} {name}: {dlc} Slave");
+        let _ = writeln!(out, "BO_ {msg_id} {name}: {dlc} Slave");
         out.push_str(" SG_ PID M : 0|8@1+ (1,0) [0|255] \"\"  Unspecified__XXX\n");
 
         for field in daq_layout(project, lists) {
@@ -165,7 +166,7 @@ pub fn create_dbc_file(
                 let _ = writeln!(
                     sig_valtypes,
                     "SIG_VALTYPE_ {} {} : {};",
-                    can_id,
+                    msg_id,
                     sanitize_name(&placement.name),
                     valtype,
                 );
@@ -177,7 +178,7 @@ pub fn create_dbc_file(
             {
                 if !cm.text_table.is_empty() && val_table_emitted.insert(sig.name.clone()) {
                     val_tables.push_str(&format_val_table(
-                        *can_id,
+                        msg_id,
                         &sanitize_name(&placement.name),
                         cm,
                     ));
@@ -243,7 +244,17 @@ fn fd_attribute_definitions() -> String {
 /// Returns the `VFrameFormat` attribute value for one CAN FD message.
 fn fd_frame_format_line(can_id: u32) -> String {
     let frame_format = if can_id > 0x7FF { 15 } else { 14 };
-    format!("BA_ \"VFrameFormat\" BO_ {can_id} {frame_format};\n")
+    let msg_id = dbc_message_id(can_id);
+    format!("BA_ \"VFrameFormat\" BO_ {msg_id} {frame_format};\n")
+}
+
+/// The DBC message id for `can_id`: DBC marks an extended (29-bit) id by setting bit 31.
+fn dbc_message_id(can_id: u32) -> u32 {
+    if can_id > 0x7FF {
+        can_id | 0x8000_0000
+    } else {
+        can_id
+    }
 }
 
 /// Render the `SG_` line for a placement whose name resolved to `sig`.
@@ -669,6 +680,33 @@ mod tests {
         assert_eq!(sanitize_unit("k\u{2126}"), "kOhm");
         assert_eq!(sanitize_unit("m²"), "m²");
         assert_eq!(sanitize_unit("转速"), "__");
+    }
+
+    #[test]
+    fn extended_daq_id_sets_bit_31_on_every_message_reference() {
+        let mut proj = project(Some(CanFdInfo {
+            max_dlc: 64,
+            ..Default::default()
+        }));
+        proj.xcp_data
+            .as_mut()
+            .unwrap()
+            .xcp_info
+            .as_mut()
+            .unwrap()
+            .can_id_slave = Some(0x18FF0002);
+        let dbc = create_dbc_file(&proj, &daq_lists_16_bytes(), Protocol::Xcp, "test.a2l").unwrap();
+        let msg_id = 0x8000_0000u32 | 0x18FF0002;
+        assert!(
+            dbc.contains(&format!("BO_ {msg_id} DAQ:")),
+            "got:
+{dbc}"
+        );
+        assert!(
+            dbc.contains(&format!("BA_ \"VFrameFormat\" BO_ {msg_id} 15;")),
+            "got:
+{dbc}"
+        );
     }
 
     #[test]
