@@ -128,10 +128,10 @@ stage_bundle() {
     return 0
 }
 
-# Stage the .tgz produced by `npm run package`
+# Stage the .tgz produced by `npm run package` for the current package.json version
 gui_stage() {
     local tgz_file
-    tgz_file=$(cd canking-gui && ls ./*.tgz 2>/dev/null | head -n 1)
+    tgz_file=$(cd canking-gui && node -p "const p = require('./package.json'); p.name + '-' + p.version + '.tgz'")
     stage_bundle canking-gui "$tgz_file" "${tgz_file##*/}" \
         "No .tgz found in canking-gui/; run 'npm run package' (or ./run.sh gui) first" \
         THIRD_PARTY_LICENSES.html THIRD_PARTY_LICENSES_FONTS.txt license.txt ReleaseNotes.txt user-guide.md UserGuide.html

@@ -4,6 +4,8 @@ This repository contains components for setting up and logging DAQ measurements 
 
 Currently supports CAN with XCP/CCP. The CanKing extensions can be used with any Kvaser Canking compatible hardware, but the generated t-scripts can only be used with the related hardware such as the Memorator.
 
+The CanKing extensions require Kvaser CanKing 7.6 or later.
+
 ## Repository layout
 
 The Rust crates form a single Cargo workspace (shared `./target` and a single
@@ -44,7 +46,7 @@ Prerequisites:
 - for the GUI: Node.js 22 (see [canking-gui/.nvmrc](canking-gui/.nvmrc)) + npm
 - to package the extensions (`./run.sh stage`): [cargo-about](https://github.com/EmbarkStudios/cargo-about)
   (`cargo install --locked --features cli cargo-about`)
-- to use the extensions: [Kvaser CanKing 7](https://kvaser.com)
+- to use the extensions: [Kvaser CanKing](https://kvaser.com) 7.6 or later
 - to compile generated t-scripts: `scc.exe` from Kvaser CANlib SDK (Windows). TRX, also from CANLIB SDK can be used to work on and compile t-scripts
 
 Or build everything in Docker, see [Building in Docker](#building-in-docker).

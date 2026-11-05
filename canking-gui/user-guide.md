@@ -8,6 +8,8 @@ This pane allows the user to read in an A2L file, filter & select through availa
 
 ## Support
 
+Requires Kvaser CanKing 7.6 or later.
+
 Currently, DAQ Configurator supports XCP and CCP as measurement protocols and CAN as transport protocol.
 
 ## Usage

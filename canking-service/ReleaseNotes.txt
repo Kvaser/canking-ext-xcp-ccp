@@ -1,6 +1,17 @@
 Kvaser CanKing 7 DAQ Decoder extension
 ===============================================================================
 
+
+New Features and Fixed Problems in version 1.1.0
+-------------------------------------------------------------------------------
+Requires Kvaser CanKing 7.6 or later.
+- Commands are padded to 8 bytes, or to MAX_DLC on CAN FD when the A2L sets MAX_DLC_REQUIRED
+- Dynamic DAQ lists are numbered from MIN_DAQ instead of 0
+- Each signal's ECU_ADDRESS_EXTENSION is sent in WRITE_DAQ
+- Fixed a signal sharing an ODT entry with part of a split signal being decoded from the wrong bytes
+
+
 New Features and Fixed Problems in version 1.0.0
 -------------------------------------------------------------------------------
+Requires Kvaser CanKing 7.6 or later.
 - Initial release.

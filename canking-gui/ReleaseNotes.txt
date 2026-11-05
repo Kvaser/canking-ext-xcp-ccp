@@ -1,6 +1,21 @@
 Kvaser CanKing 7 DAQ Configurator extension
 ===============================================================================
 
+
+New Features and Fixed Problems in version 1.1.0
+-------------------------------------------------------------------------------
+Requires Kvaser CanKing 7.6 or later.
+- Added support for the A2L keywords ECU_ADDRESS_EXTENSION, MIN_DAQ and MAX_DLC_REQUIRED
+- Added support for every GRANULARITY_ODT_ENTRY_SIZE_DAQ_* granularity; ODT entries now start and end on whole granules
+- Added linear FORM conversions
+- Added a warning for signals whose conversion is not supported (non-linear RAT_FUNC and FORM, TAB_INTP, TAB_NOINTP); such signals show raw values
+- Commands in generated t-scripts are padded to 8 bytes, or to MAX_DLC on CAN FD when MAX_DLC_REQUIRED is set
+- Fixed a signal sharing an ODT entry with part of a split signal being decoded from the wrong bytes in the DBC, the t-script and the data processor
+- Fixed 29-bit CAN ids flagged with bit 31 in the A2L
+- Fixed extended CAN ids in the generated DBC
+
+
 New Features and Fixed Problems in version 1.0.0
 -------------------------------------------------------------------------------
+Requires Kvaser CanKing 7.6 or later.
 - Initial release.
