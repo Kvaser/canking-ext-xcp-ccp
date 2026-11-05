@@ -106,6 +106,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
     let mut odt_entry_granularity: u16 = 0;
     let mut timestamp_size: u16 = 0;
     let mut timestamp_fixed = false;
+    let mut prescaler_supported = false;
 
     let mode = match tokens.first().map(String::as_str) {
         Some("STATIC") => DaqMode::Static,
@@ -145,7 +146,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
                     timestamp_size = size;
                     timestamp_fixed = fixed;
                 }
-                _ => {} // PRESCALER_SUPPORTED, etc.
+                _ => {}
             }
         } else {
             // Header-level `GRANULARITY_ODT_ENTRY_SIZE_DAQ_<unit> <MAX_ODT_ENTRY_SIZE_DAQ>`.
@@ -162,6 +163,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
                     max_odt_entry_size = v;
                 }
             }
+            prescaler_supported |= tokens[i] == "PRESCALER_SUPPORTED";
             i += 1;
         }
     }
@@ -174,6 +176,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
         timestamp_fixed,
         min_daq,
         odt_entry_granularity,
+        prescaler_supported,
     };
     (daq_info, events)
 }
@@ -602,5 +605,9 @@ mod tests {
             "a DAQ_LIST id must not be mistaken for MIN_DAQ"
         );
         assert_eq!(d.odt_entry_granularity, 0);
+        assert!(!d.prescaler_supported);
+
+        let d = parse("DYNAMIC 0x10 0x04 0x00 OVERLOAD_INDICATION_EVENT PRESCALER_SUPPORTED");
+        assert!(d.prescaler_supported);
     }
 }

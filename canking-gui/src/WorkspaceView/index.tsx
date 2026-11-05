@@ -32,13 +32,14 @@ import EventAssignTable from './EventAssignTable';
 import BusSection from './BusSection';
 import TriggerSection from './TriggerSection';
 import TScriptSection from './TScriptSection';
-import DaqCanIdSection from './DaqCanIdSection';
+import DaqListSection from './DaqListSection';
 import {
   DEFAULT_TSCRIPT_OPTIONS,
   errorText,
   formatBitrate,
   parseCanId,
   parseNonNegativeInt,
+  parsePrescaler,
   readA2lText,
   SignalEventMap,
   TriggerCondition,
@@ -123,6 +124,11 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     'daqCanIdOverrides',
     {},
   );
+  const [prescalers, setPrescalers, prescalersLoaded] = useProjectDataSlice<Record<string, string>>(
+    id,
+    'daqPrescalers',
+    {},
+  );
 
   const [warnings, setWarnings, warningsLoaded] = useSessionDataSlice<string[]>(id, 'warnings', []);
   const [dbc, setDbc, dbcLoaded] = useSessionDataSlice<string>(id, 'dbc', '');
@@ -141,6 +147,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     processorNameLoaded &&
     processorNodeIdLoaded &&
     canIdOverridesLoaded &&
+    prescalersLoaded &&
     warningsLoaded &&
     dbcLoaded &&
     configJsonLoaded &&
@@ -195,6 +202,8 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     () => summary?.ok?.transports.find(t => t.protocol === activeProtocol),
     [summary, activeProtocol],
   );
+  // XCP sends the prescaler as a byte, CCP as a word
+  const prescalerMax = detectedTransport?.prescaler ? (activeProtocol === 'xcp' ? 0xff : 0xffff) : undefined;
 
   const loadFile = useCallback(
     async (file: File) => {
@@ -255,6 +264,17 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
         }
       }
 
+      const daqPrescalers: [number, number][] = [];
+      for (const list of prescalerMax !== undefined ? daqListPreview : []) {
+        const raw = prescalers[String(list.id)] ?? '';
+        const parsed = parsePrescaler(raw, prescalerMax ?? 1);
+        if (parsed === null) {
+          warningLines.push(`DAQ list ${list.id}: invalid prescaler "${raw}", using 1 instead`);
+        } else if (parsed > 1) {
+          daqPrescalers.push([list.id, parsed]);
+        }
+      }
+
       const out = generator.buildConfig(
         a2lFile.text,
         a2lFile.name,
@@ -262,6 +282,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
         assignments,
         startDaq,
         daqCanIdOverrides,
+        daqPrescalers,
         activeProtocol,
       );
       warningLines.push(...out.warnings.map(diagnosticText));
@@ -303,6 +324,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
               signalAccess: tscriptOptions.standalone ? 'inline' : 'dbc',
             },
             daqCanIdOverrides,
+            daqPrescalers,
             activeProtocol,
           );
           setTscript(tscriptOut.tscript);
@@ -377,6 +399,8 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     eventAssignments,
     daqListPreview,
     canIdOverrides,
+    prescalers,
+    prescalerMax,
     activeProtocol,
     startDaq,
     conditions,
@@ -727,17 +751,20 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                   {daqListPreview.length > 0 && (
                     <Box>
                       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                        DAQ list CAN identifiers
+                        DAQ lists
                       </Typography>
-                      <DaqCanIdSection
+                      <DaqListSection
                         daqLists={daqListPreview}
                         overrides={canIdOverrides}
                         onOverridesChange={setCanIdOverrides}
+                        prescalerMax={prescalerMax}
+                        prescalers={prescalers}
+                        onPrescalersChange={setPrescalers}
                       />
                       {activeProtocol === 'xcp' && (
                         <Typography variant="caption" color="text.secondary">
-                          Assigned ids above are sent via SET_DAQ_ID as part of the init sequence, and only take effect
-                          once &quot;Start DAQ on the ECU&quot; is enabled.
+                          Assigned ids (SET_DAQ_ID) and prescalers are sent as part of the init sequence, and only take
+                          effect once &quot;Start DAQ on the ECU&quot; is enabled.
                         </Typography>
                       )}
                     </Box>

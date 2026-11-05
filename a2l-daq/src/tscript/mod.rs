@@ -237,6 +237,7 @@ mod tests {
         use crate::daq::{Odt, OdtEntry};
 
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             odts: vec![Odt {
@@ -321,6 +322,7 @@ mod tests {
         };
         let daq_lists = vec![
             DaqList {
+                prescaler: 1,
                 id: 0,
                 first_pid: 1,
                 event: None,
@@ -334,6 +336,7 @@ mod tests {
                 can_id: CanIdSource::Default,
             },
             DaqList {
+                prescaler: 1,
                 id: 1,
                 first_pid: 2,
                 event: None,

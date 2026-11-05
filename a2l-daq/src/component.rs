@@ -70,6 +70,7 @@ impl bindings::Guest for Component {
         assignments: Vec<bindings::EventAssignment>,
         start_daq: bool,
         daq_can_id_overrides: Vec<(u16, u32)>,
+        daq_prescalers: Vec<(u16, u16)>,
         protocol: bindings::Protocol,
     ) -> Result<bindings::ConfigOutput, String> {
         let proto = protocol_from_wit(protocol);
@@ -85,6 +86,7 @@ impl bindings::Guest for Component {
         core.warnings
             .extend(crate::dropped_signals(&project, &selected, &rejected));
         crate::apply_can_id_overrides(&mut core.daq_lists, &daq_can_id_overrides);
+        crate::apply_prescalers(&mut core.daq_lists, &daq_prescalers);
 
         let config = crate::Config {
             project,
@@ -109,6 +111,7 @@ impl bindings::Guest for Component {
         assignments: Vec<bindings::EventAssignment>,
         options: bindings::TscriptOptions,
         daq_can_id_overrides: Vec<(u16, u32)>,
+        daq_prescalers: Vec<(u16, u16)>,
         protocol: bindings::Protocol,
     ) -> Result<bindings::TscriptOutput, String> {
         let proto = protocol_from_wit(protocol);
@@ -123,6 +126,7 @@ impl bindings::Guest for Component {
         core.warnings
             .extend(crate::dropped_signals(&project, &selected, &rejected));
         crate::apply_can_id_overrides(&mut core.daq_lists, &daq_can_id_overrides);
+        crate::apply_prescalers(&mut core.daq_lists, &daq_prescalers);
 
         // Manual override if chosen, else the A2L transport block's defaults.
         let (is_fd, bitrate, data_bitrate) = match &options.bus {
@@ -253,6 +257,7 @@ fn transport_to_wit(t: crate::TransportInfo) -> bindings::TransportInfo {
         can_fd: t.can_fd,
         bitrate: t.bitrate,
         data_bitrate: t.data_bitrate,
+        prescaler: t.prescaler,
     }
 }
 

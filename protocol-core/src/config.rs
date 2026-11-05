@@ -84,6 +84,7 @@ impl Config {
                     timestamp_fixed: false,
                     min_daq: 0,
                     odt_entry_granularity: 1,
+                    prescaler_supported: true,
                 },
                 event_info: EventInfo {
                     events: vec![EventEntry {
@@ -140,6 +141,7 @@ impl Config {
         };
 
         let daq_lists = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             odts: vec![Odt {

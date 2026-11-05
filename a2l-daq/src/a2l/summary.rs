@@ -39,6 +39,7 @@ pub struct TransportInfo {
     pub can_fd: bool,
     pub bitrate: Option<u32>,
     pub data_bitrate: Option<u32>,
+    pub prescaler: bool,
 }
 
 /// Summary of all signals, events, and protocols declared in an A2L file.
@@ -49,7 +50,6 @@ pub struct A2lSummary {
     pub protocols: Vec<Protocol>,
     pub transports: Vec<TransportInfo>,
     pub groups: Vec<GroupInfo>,
-    /// Keywords in the file that change the outputs but aren't read, see [`UnreadKeyword`].
     pub unread: Vec<UnreadKeyword>,
 }
 
@@ -130,6 +130,10 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
                     can_fd: fd.is_some(),
                     bitrate: info.and_then(|i| i.baudrate),
                     data_bitrate: fd.and_then(|f| f.data_baudrate),
+                    prescaler: project
+                        .xcp_data
+                        .as_ref()
+                        .is_some_and(|x| x.daq_info.prescaler_supported),
                 }
             }
             Protocol::Ccp => TransportInfo {
@@ -137,6 +141,7 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
                 can_fd: false,
                 bitrate: project.ccp_data.as_ref().and_then(|c| c.info.baudrate),
                 data_bitrate: None,
+                prescaler: true,
             },
         })
         .collect();

@@ -210,6 +210,7 @@ mod tests {
             ..Default::default()
         });
         cfg.daq_lists.push(DaqList {
+            prescaler: 1,
             id: 1,
             first_pid: 0,
             odts: vec![Odt {

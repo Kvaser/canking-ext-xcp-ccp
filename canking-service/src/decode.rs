@@ -539,6 +539,7 @@ mod tests {
         second.upper_limit = 255.0;
         cfg.project.signals.push(second);
         cfg.daq_lists.push(DaqList {
+            prescaler: 1,
             id: 1,
             first_pid: 1,
             odts: vec![Odt {
@@ -801,6 +802,7 @@ mod tests {
         };
         cfg.project.signals.push(masked);
         cfg.daq_lists.push(DaqList {
+            prescaler: 1,
             id: 1,
             first_pid: 1,
             odts: vec![Odt {
@@ -852,6 +854,7 @@ mod tests {
         };
         cfg.project.signals.push(unmasked);
         cfg.daq_lists.push(DaqList {
+            prescaler: 1,
             id: 1,
             first_pid: 1,
             odts: vec![Odt {

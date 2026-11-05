@@ -159,6 +159,7 @@ mod tests {
             ..Default::default()
         };
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: Some("Task10ms".into()),
@@ -193,6 +194,7 @@ mod tests {
             ..Default::default()
         };
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,

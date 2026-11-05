@@ -141,6 +141,8 @@ interface generator {
     bitrate: option<u32>,
     /// CAN FD data-phase bit rate in bit/s, if declared.
     data-bitrate: option<u32>,
+    /// True when DAQ lists accept a prescaler: always for CCP, for XCP when the A2L declares `PRESCALER_SUPPORTED`.
+    prescaler: bool,
   }
 
   /// A keyword in the A2L that changes the outputs but isn't read
@@ -200,6 +202,7 @@ interface generator {
     assignments: list<event-assignment>,
     start-daq: bool,
     daq-can-id-overrides: list<tuple<u16, u32>>,
+    daq-prescalers: list<tuple<u16, u16>>,
     protocol: protocol,
   ) -> result<config-output, string>;
 
@@ -267,6 +270,7 @@ interface generator {
     assignments: list<event-assignment>,
     options: tscript-options,
     daq-can-id-overrides: list<tuple<u16, u32>>,
+    daq-prescalers: list<tuple<u16, u16>>,
     protocol: protocol,
   ) -> result<tscript-output, string>;
 }

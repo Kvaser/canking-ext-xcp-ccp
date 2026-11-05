@@ -206,6 +206,8 @@ pub struct DaqInfo {
     pub min_daq: u16,
     #[cfg_attr(feature = "serde", serde(default))]
     pub odt_entry_granularity: u16,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub prescaler_supported: bool,
 }
 
 /// A single event channel as declared in an `/begin EVENT` block.
@@ -421,7 +423,13 @@ pub struct DaqList {
     pub first_pid: u16,
     pub odts: Vec<Odt>,
     pub event: Option<String>,
-    /// This list's own CAN id, distinct from the module's default DAQ CAN id.
     #[cfg_attr(feature = "serde", serde(default))]
     pub can_id: CanIdSource,
+    #[cfg_attr(feature = "serde", serde(default = "every_cycle"))]
+    pub prescaler: u16,
+}
+
+#[cfg(feature = "serde")]
+fn every_cycle() -> u16 {
+    1
 }

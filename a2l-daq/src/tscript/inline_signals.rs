@@ -411,6 +411,7 @@ mod tests {
 
     fn daq(entries: Vec<(&str, u16)>) -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 1,
             event: None,
@@ -678,6 +679,7 @@ mod tests {
     fn split_signal_is_rejected_as_undecodable_from_one_frame() {
         let p = project(vec![sig("Long", 6)]);
         let lists = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 1,
             event: None,

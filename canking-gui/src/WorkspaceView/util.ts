@@ -90,6 +90,15 @@ export function parseNonNegativeInt(text: string): number | null {
   return Number.isSafeInteger(value) ? value : null;
 }
 
+/** A DAQ list prescaler typed by the user: blank is 1; null unless it is a whole number from 1 to `max`. */
+export function parsePrescaler(text: string, max: number): number | null {
+  if (text.trim() === '') {
+    return 1;
+  }
+  const value = parseNonNegativeInt(text);
+  return value !== null && value >= 1 && value <= max ? value : null;
+}
+
 /** The largest CAN identifier: 29 bits, i.e. the extended-id range. */
 const MAX_CAN_ID = 0x1fff_ffff;
 

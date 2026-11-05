@@ -24,7 +24,8 @@ pub use a2l::{
 pub use daq::build_daq_list;
 pub use dbc::{DbcError, create_dbc_file, sanitize_name};
 pub use pipeline::{
-    CoreOutput, Diagnostic, apply_assignments, apply_can_id_overrides, build, dropped_signals,
+    CoreOutput, Diagnostic, apply_assignments, apply_can_id_overrides, apply_prescalers, build,
+    dropped_signals,
 };
 pub use traceability::traceability_lines;
 pub use xcp::{XcpCommand, XcpPhase, XcpResponse, build_init_commands};

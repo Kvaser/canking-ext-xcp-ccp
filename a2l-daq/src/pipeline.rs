@@ -203,6 +203,15 @@ pub fn apply_can_id_overrides(daq_lists: &mut [DaqList], overrides: &[(u16, u32)
     }
 }
 
+/// Set the prescaler of DAQ lists, by list identifier. A prescaler below 1 is taken as 1.
+pub fn apply_prescalers(daq_lists: &mut [DaqList], prescalers: &[(u16, u16)]) {
+    for &(list_id, prescaler) in prescalers {
+        if let Some(list) = daq_lists.iter_mut().find(|d| d.id == list_id) {
+            list.prescaler = prescaler.max(1);
+        }
+    }
+}
+
 /// Flag placed signals whose conversion could not be applied, once per signal.
 fn unsupported_conversions(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Diagnostic> {
     let signals = crate::layout::signal_lookup(project);
@@ -256,6 +265,23 @@ fn colliding_names(daq_lists: &[DaqList]) -> Vec<Diagnostic> {
 mod tests {
     use super::*;
     use crate::{Protocol, parse_a2l, parse_a2l_with_rejects};
+
+    #[test]
+    fn prescalers_apply_by_list_id_and_never_drop_below_one() {
+        let mut lists: Vec<DaqList> = (0..3)
+            .map(|id| DaqList {
+                id,
+                first_pid: 0,
+                odts: Vec::new(),
+                event: None,
+                can_id: CanIdSource::Default,
+                prescaler: 1,
+            })
+            .collect();
+        apply_prescalers(&mut lists, &[(1, 100), (2, 0), (7, 5)]);
+        let got: Vec<u16> = lists.iter().map(|l| l.prescaler).collect();
+        assert_eq!(got, [1, 100, 1]);
+    }
 
     const A2L: &str = r#"
     /begin MEASUREMENT Rpm "Engine speed" UWORD Rpm_CM 0 0 0 8000 ECU_ADDRESS 0x1000 /end MEASUREMENT
@@ -441,6 +467,7 @@ mod tests {
         };
         let mut lists = vec![
             DaqList {
+                prescaler: 1,
                 id: 0,
                 first_pid: 0,
                 odts: vec![entry("A")],
@@ -448,6 +475,7 @@ mod tests {
                 can_id: CanIdSource::Default,
             },
             DaqList {
+                prescaler: 1,
                 id: 1,
                 first_pid: 1,
                 odts: vec![entry("B")],
@@ -455,6 +483,7 @@ mod tests {
                 can_id: CanIdSource::Fixed { id: 0x789 },
             },
             DaqList {
+                prescaler: 1,
                 id: 2,
                 first_pid: 2,
                 odts: vec![entry("C")],

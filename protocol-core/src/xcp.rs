@@ -326,13 +326,14 @@ fn phase_set_mode(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) 
         });
         let id = word(wire, ctx.big_endian);
         let ev = word(event_ch, ctx.big_endian);
-        // Prescaler 1; priority 0
+        // The prescaler is one byte in XCP; priority 0
+        let prescaler = daq.prescaler.clamp(1, u8::MAX as u16) as u8;
         push(
             cmds,
             XcpPhase::SetMode,
-            vec![0xE0, mode, id[0], id[1], ev[0], ev[1], 0x01, 0x00],
+            vec![0xE0, mode, id[0], id[1], ev[0], ev[1], prescaler, 0x00],
             format!(
-                "SET_DAQ_LIST_MODE  daq={} event={} mode=0x{:02X}",
+                "SET_DAQ_LIST_MODE  daq={} event={} mode=0x{:02X} prescaler={prescaler}",
                 wire, event_ch, mode
             ),
         );
@@ -400,6 +401,7 @@ mod tests {
 
     fn one_daq_list(id: u16) -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id,
             first_pid: 0,
             odts: vec![Odt {
@@ -520,6 +522,7 @@ mod tests {
     #[test]
     fn set_daq_ptr_once_per_odt_at_entry_zero() {
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             odts: vec![
@@ -587,6 +590,23 @@ mod tests {
         assert_eq!(mode_without.bytes[1], 0x00, "no timestamp declared");
         assert_eq!(mode_with.bytes[6], 0x01, "prescaler 1");
         assert_eq!(mode_with.bytes[7], 0x00, "priority 0");
+    }
+
+    #[test]
+    fn set_daq_list_mode_carries_the_list_prescaler_as_one_byte() {
+        let prescaler_byte = |prescaler| {
+            let mut lists = one_daq_list(0);
+            lists[0].prescaler = prescaler;
+            let cmds = build_init_commands(&project(DaqMode::Dynamic, vec![], 0), &lists);
+            cmds.iter().find(|c| c.bytes[0] == 0xE0).unwrap().bytes[6]
+        };
+        assert_eq!(prescaler_byte(100), 100);
+        assert_eq!(
+            prescaler_byte(300),
+            255,
+            "clamped to the byte XCP has for it"
+        );
+        assert_eq!(prescaler_byte(0), 1, "0 is not a valid prescaler");
     }
 
     #[test]
@@ -724,6 +744,7 @@ mod tests {
         let p = project(DaqMode::Static, vec![], 0);
         let daq = vec![
             DaqList {
+                prescaler: 1,
                 id: 2,
                 first_pid: 0,
                 odts: vec![Odt {
@@ -733,6 +754,7 @@ mod tests {
                 can_id: CanIdSource::Default,
             },
             DaqList {
+                prescaler: 1,
                 id: 7,
                 first_pid: 0,
                 odts: vec![Odt {

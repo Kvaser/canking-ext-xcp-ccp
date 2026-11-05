@@ -389,6 +389,7 @@ fn pack_event_group(
             odts,
             event: event.clone(),
             can_id: daq_def.can_id,
+            prescaler: 1,
         });
 
         // Signals with any unplaceable chunk are retried on the next DAQ list

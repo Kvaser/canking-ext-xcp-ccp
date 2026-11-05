@@ -324,6 +324,7 @@ mod tests {
 
     fn one_odt(entries: Vec<OdtEntry>) -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -394,6 +395,7 @@ mod tests {
             size: 2,
         };
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 3,
             event: None,

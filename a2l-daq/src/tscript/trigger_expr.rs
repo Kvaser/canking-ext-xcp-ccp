@@ -438,6 +438,7 @@ mod tests {
             },
         );
         let daq_lists = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 1,
             event: None,

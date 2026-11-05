@@ -389,6 +389,7 @@ mod tests {
             })
             .collect();
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -442,6 +443,7 @@ mod tests {
             ..Default::default()
         }];
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -503,6 +505,7 @@ mod tests {
             },
         );
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -538,6 +541,7 @@ mod tests {
             ..Default::default()
         }];
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -573,6 +577,7 @@ mod tests {
             ..Default::default()
         }];
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -608,6 +613,7 @@ mod tests {
             ..Default::default()
         }];
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -731,6 +737,7 @@ mod tests {
         ];
         let daq = vec![
             DaqList {
+                prescaler: 1,
                 id: 0,
                 first_pid: 0,
                 event: None,
@@ -744,6 +751,7 @@ mod tests {
                 can_id: CanIdSource::Default,
             },
             DaqList {
+                prescaler: 1,
                 id: 1,
                 first_pid: 0,
                 event: None,

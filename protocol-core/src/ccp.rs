@@ -304,15 +304,15 @@ fn phase_set_mode(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
             .and_then(|name| ctx.rasters.iter().find(|r| r.name == name))
             .map(|r| r.channel as u8)
             .unwrap_or(0);
-        // Prescaler 1 (every event triggers a transmission).
-        let pre = word(1, ctx.big_endian);
+        let prescaler = daq.prescaler.max(1);
+        let pre = word(prescaler, ctx.big_endian);
         seq.push(
             CcpPhase::SetMode,
             START_STOP,
             &[MODE_PREPARE, list, last_odt, event_ch, pre[0], pre[1]],
             format!(
-                "START_STOP  prepare daq={} last_odt={} event={}",
-                list, last_odt, event_ch
+                "START_STOP  prepare daq={} last_odt={} event={} prescaler={}",
+                list, last_odt, event_ch, prescaler
             ),
         );
     }
@@ -364,6 +364,7 @@ mod tests {
 
     fn one_daq_list() -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             odts: vec![Odt {
@@ -582,6 +583,19 @@ mod tests {
         assert_eq!(ss.bytes[4], 0, "last odt (single ODT)");
         assert_eq!(ss.bytes[5], 3, "raster DAQ_CHAN1 channel 3");
         assert_eq!(&ss.bytes[6..8], &1u16.to_le_bytes(), "prescaler 1");
+    }
+
+    #[test]
+    fn start_stop_prepare_carries_the_list_prescaler_in_slave_byte_order() {
+        let mut lists = one_daq_list();
+        lists[0].prescaler = 1000;
+        let little = build_init_commands(&project(false), &lists);
+        let big = build_init_commands(&project(true), &lists);
+        assert_eq!(
+            &find(&little, START_STOP).bytes[6..8],
+            &1000u16.to_le_bytes()
+        );
+        assert_eq!(&find(&big, START_STOP).bytes[6..8], &1000u16.to_be_bytes());
     }
 
     #[test]

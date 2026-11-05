@@ -78,6 +78,7 @@ try {
     assignments,
     testCase.startDaq ?? false,
     testCase.daqCanIdOverrides ?? [],
+    testCase.daqPrescalers ?? [],
     protocol,
   );
 } catch (e) {
