@@ -8,8 +8,13 @@ Requires Kvaser CanKing 7.6 or later.
 - Added support for the A2L keywords ECU_ADDRESS_EXTENSION, MIN_DAQ and MAX_DLC_REQUIRED
 - Added support for every GRANULARITY_ODT_ENTRY_SIZE_DAQ_* granularity; ODT entries now start and end on whole granules
 - Added linear FORM conversions
+- Added a prescaler per DAQ list, to send a list on every n-th cycle of its event: always for CCP, for XCP when the A2L declares PRESCALER_SUPPORTED
 - Added a warning for signals whose conversion is not supported (non-linear RAT_FUNC and FORM, TAB_INTP, TAB_NOINTP); such signals show raw values
-- Commands in generated t-scripts are padded to 8 bytes, or to MAX_DLC on CAN FD when MAX_DLC_REQUIRED is set
+- Added a warning when the A2L uses keywords that change the results but are not read, such as /include or a relative PID field
+- t-script: a timed capture can repeat, each time the trigger condition turns from false to true, with an optional limit on the number of captures
+- t-script: the DAQ setup starts over when the ECU stops answering, and optionally when no DAQ frames arrive for a set time
+- XCP commands in generated t-scripts are padded to 8 bytes, or to MAX_DLC on CAN FD, when the A2L sets MAX_DLC_REQUIRED; CCP commands are always 8 bytes
+- Fixed a timed t-script capturing only once, because stopping the logger also stopped DAQ on the ECU
 - Fixed a signal sharing an ODT entry with part of a split signal being decoded from the wrong bytes in the DBC, the t-script and the data processor
 - Fixed 29-bit CAN ids flagged with bit 31 in the A2L
 - Fixed extended CAN ids in the generated DBC
