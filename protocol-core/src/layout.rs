@@ -166,20 +166,47 @@ pub fn daq_layout(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Field> {
             let mut byte_offset: u32 = ts_in_odt as u32;
 
             for entry in &odt.entries {
-                let mut bit_cursor: u32 = 8 + byte_offset * 8;
+                let entry_start: u32 = 8 + byte_offset * 8;
+                let entry_end = entry.ecu_address + entry.size as u64;
+                // Where the next name lands when its address can't place it.
+                let mut cursor: u16 = 0;
                 for name in &entry.names {
                     // Exact lookup first, then try to find a parent signal for a split chunk.
-                    let (signal, chunk_size) = signal_map
-                        .get(name.as_str())
-                        .map(|s| (Some((*s).clone()), None))
-                        .unwrap_or_else(|| {
-                            let parent = name
-                                .rfind('[')
-                                .map(|i| &name[..i])
-                                .and_then(|base| signal_map.get(base))
-                                .map(|s| (*s).clone());
-                            (parent, Some(entry.size))
-                        });
+                    let exact = signal_map.get(name.as_str()).map(|s| (*s).clone());
+                    let parent = || {
+                        name.rfind('[')
+                            .map(|i| &name[..i])
+                            .and_then(|base| signal_map.get(base))
+                            .map(|s| (*s).clone())
+                    };
+                    // A signal sits at its own address inside the entry, which may start earlier or hold other signals. 
+                    // A chunk is the part of its parent the entry covers.
+                    let (signal, chunk_size, offset_in_entry) = match exact {
+                        Some(sig) => {
+                            let end = sig.ecu_address + sig.size as u64;
+                            let inside = sig.ecu_address >= entry.ecu_address && end <= entry_end;
+                            let at = if inside {
+                                (sig.ecu_address - entry.ecu_address) as u16
+                            } else {
+                                cursor
+                            };
+                            (Some(sig), None, at)
+                        }
+                        None => {
+                            let parent = parent();
+                            let covered = parent.as_ref().and_then(|p| {
+                                let from = p.ecu_address.max(entry.ecu_address);
+                                let to = (p.ecu_address + p.size as u64).min(entry_end);
+                                (from < to).then(|| {
+                                    ((from - entry.ecu_address) as u16, (to - from) as u16)
+                                })
+                            });
+                            let (at, size) =
+                                covered.unwrap_or((cursor, entry.size.saturating_sub(cursor)));
+                            (parent, Some(size), at)
+                        }
+                    };
+                    let bit_cursor = entry_start + offset_in_entry as u32 * 8;
 
                     let bit_length = match (&signal, chunk_size) {
                         (_, Some(size)) => size as u32 * 8,
@@ -215,7 +242,7 @@ pub fn daq_layout(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Field> {
                         offset,
                         unit,
                     })));
-                    bit_cursor += span_bytes as u32 * 8;
+                    cursor = offset_in_entry + span_bytes;
                 }
                 byte_offset += entry.size as u32;
             }
@@ -458,6 +485,70 @@ mod tests {
         assert_eq!((p[0].factor, p[0].offset), (0.5, -3.0));
         assert_eq!(p[0].unit, "V");
         assert!(p[0].signal.is_some(), "resolved through the parent");
+    }
+
+    #[test]
+    fn last_chunk_sharing_an_entry_ends_at_its_parent() {
+        // Big (10 bytes) split 7+3; the 3-byte tail merged with the adjacent Next.
+        let mut big = signal("Big", 10);
+        big.ecu_address = 0x100;
+        let mut next = signal("Next", 2);
+        next.ecu_address = 0x10A;
+        let project = A2lProject {
+            signals: vec![big, next],
+            ..Default::default()
+        };
+        let daq = one_odt(vec![OdtEntry {
+            names: vec!["Big[1]".into(), "Next".into()],
+            ecu_address: 0x107,
+            size: 5,
+        }]);
+        let fields = daq_layout(&project, &daq);
+        let p = placements(&fields);
+        assert_eq!(p[0].chunk_size, Some(3));
+        assert_eq!(
+            (p[1].name.as_str(), p[1].byte_offset()),
+            ("Next", 4),
+            "PID + 3 chunk bytes"
+        );
+    }
+
+    #[test]
+    fn chunk_excludes_padding_at_the_end_of_its_entry() {
+        let project = A2lProject {
+            signals: vec![signal("Big", 9)],
+            ..Default::default()
+        };
+        let daq = one_odt(vec![OdtEntry {
+            names: vec!["Big[1]".into()],
+            ecu_address: 0x10 + 6,
+            size: 4, // 3 bytes left of Big, padded to a WORD multiple
+        }]);
+        let p = signal_placements(&project, &daq);
+        assert_eq!(p[0].chunk_size, Some(3));
+    }
+
+    #[test]
+    fn signals_sit_at_their_address_in_a_granule_aligned_entry() {
+        let mut a = signal("A", 1);
+        a.ecu_address = 0x11;
+        let mut b = signal("B", 1);
+        b.ecu_address = 0x12;
+        let project = A2lProject {
+            signals: vec![a, b],
+            ..Default::default()
+        };
+        let daq = one_odt(vec![OdtEntry {
+            names: vec!["A".into(), "B".into()],
+            ecu_address: 0x10,
+            size: 4,
+        }]);
+        let p = signal_placements(&project, &daq);
+        assert_eq!(
+            (p[0].byte_offset(), p[1].byte_offset()),
+            (2, 3),
+            "PID + lead byte, then the next byte"
+        );
     }
 
     #[test]

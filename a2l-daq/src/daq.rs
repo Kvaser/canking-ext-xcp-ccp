@@ -1467,4 +1467,57 @@ mod tests {
         assert_eq!(lists.len(), 1);
         assert_eq!(lists[0].odts[0].entries[0].names, vec!["A"]);
     }
+
+    /// Every whole signal decodes from the frame bytes the ECU fills from its address.
+    fn assert_layout_matches_packing(project: &A2lProject, lists: &[crate::DaqList]) {
+        let placements = protocol_core::layout::signal_placements(project, lists);
+        for list in lists {
+            for (o, odt) in list.odts.iter().enumerate() {
+                let pid = list.first_pid + o as u16;
+                let mut frame_offset = 1u32;
+                for e in &odt.entries {
+                    for name in &e.names {
+                        let Some(sig) = project.signals.iter().find(|s| &s.name == name) else {
+                            continue;
+                        };
+                        let p = placements
+                            .iter()
+                            .find(|p| p.pid == pid && &p.name == name)
+                            .unwrap();
+                        let expected = frame_offset + (sig.ecu_address - e.ecu_address) as u32;
+                        assert_eq!(p.byte_offset(), expected, "{name} in {lists:#?}");
+                    }
+                    frame_offset += e.size as u32;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn signal_after_a_merged_tail_chunk_decodes_from_its_own_bytes() {
+        let sig = |name: &str, ecu_address, size| ParsedSignal {
+            name: name.into(),
+            ecu_address,
+            size,
+            event: Some("E".into()),
+            ..Default::default()
+        };
+        // Big splits 7+3 on classic CAN; its 3-byte tail is adjacent to Next and merges with it.
+        let project = A2lProject {
+            signals: vec![sig("Big", 0x100, 10), sig("Next", 0x10A, 2)],
+            xcp_data: xcp_with_daq_lists(vec![unlimited_daq(0)]),
+            ..Default::default()
+        };
+        let (lists, unplaced) = build_daq_list(&project, Protocol::Xcp);
+        assert!(unplaced.is_empty());
+        assert!(
+            lists[0]
+                .odts
+                .iter()
+                .flat_map(|o| &o.entries)
+                .any(|e| e.names.len() == 2),
+            "precondition: the tail chunk merged with Next"
+        );
+        assert_layout_matches_packing(&project, &lists);
+    }
 }
