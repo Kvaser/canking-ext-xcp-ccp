@@ -6,13 +6,14 @@ export interface TriggerSectionProps {
   signalNames: string[];
   conditions: TriggerCondition[];
   onConditionsChange: (value: TriggerCondition[]) => void;
+  description: string;
 }
 
 /**
  * The signal trigger expression for the generated t-script. Conditions are
  * combined with AND and used as the start-logger trigger.
  */
-function TriggerSection({ signalNames, conditions, onConditionsChange }: TriggerSectionProps) {
+function TriggerSection({ signalNames, conditions, onConditionsChange, description }: TriggerSectionProps) {
   const updateCondition = (index: number, patch: Partial<TriggerCondition>) => {
     onConditionsChange(conditions.map((c, i) => (i === index ? { ...c, ...patch } : c)));
   };
@@ -20,8 +21,7 @@ function TriggerSection({ signalNames, conditions, onConditionsChange }: Trigger
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Typography variant="caption" color="text.secondary">
-        Conditions are combined with AND (e.g. Rpm &gt; 2500). Used as the start-logger trigger in the generated
-        t-script (Download t-script)
+        {description}
       </Typography>
       {conditions.map((condition, index) => (
         <Box key={index} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>

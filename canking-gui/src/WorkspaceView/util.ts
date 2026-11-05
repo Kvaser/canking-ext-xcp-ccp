@@ -29,8 +29,9 @@ export const DEFAULT_TSCRIPT_OPTIONS: TScriptOptions = {
   pretriggerMs: '200',
   timerStop: false,
   timerMs: '8000',
-  maxCaptures: '',
+  maxCaptures: '1',
   watchdogMs: '10000',
+  stopCanId: '',
   standalone: false,
   bus: {
     enabled: false,
@@ -78,10 +79,12 @@ export interface TScriptOptions {
   pretriggerMs: string;
   timerStop: boolean;
   timerMs: string;
-  /** With the timer: captures before DAQ stops; blank for no limit. Absent in projects saved before 1.1. */
+  /** With the timer: captures before DAQ stops; blank for no limit. */
   maxCaptures?: string;
-  /** Restart the DAQ init after this many ms without a DAQ frame; blank to never. Absent before 1.1. */
+  /** Restart the DAQ init after this many ms without a DAQ frame; blank to never. */
   watchdogMs?: string;
+  /** Stop logging and DAQ for good when a frame with this CAN id arrives; blank for none. */
+  stopCanId?: string;
   standalone?: boolean;
   bus: BusOverride;
 }

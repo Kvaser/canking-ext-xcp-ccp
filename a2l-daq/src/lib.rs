@@ -77,6 +77,7 @@ pub use tscript::{
     ResolvedTrigger, SignalDecoder, SignalHook, TScriptConfig, TriggerAction, TriggerCondition,
     TriggerError, TriggerExprError, TriggerParts, TriggerSignal, TriggerTerm, build_daq_init,
     build_trigger, bus_defaults, dbc_trigger_signals, decoder_functions, decoders_for,
-    expand_signal_indices, generate_tscript, helper_typedef, inline_trigger_signals, parse_terms,
-    resolve_signal_hooks, resolve_terms, resolve_trigger,
+    expand_signal_indices, generate_tscript, helper_typedef, inline_trigger_signals,
+    merge_decoders, parse_terms, resolve_signal_hooks, resolve_terms, resolve_trigger,
+    stop_can_id_conflict,
 };

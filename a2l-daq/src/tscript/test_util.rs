@@ -56,6 +56,7 @@ pub(super) fn init_config(
     stop: Vec<Command>,
 ) -> TScriptConfig {
     TScriptConfig {
+        stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
         channels: vec![CanChannel {
@@ -65,6 +66,7 @@ pub(super) fn init_config(
         }],
         pretrigger_ms: 0,
         signals: vec![SignalHook {
+            stop: None,
             message: MessageRef::Dbc("DAQ".into()),
             trigger: None,
             handles_responses: true,
@@ -155,6 +157,7 @@ pub(super) fn standalone_config(can_id: u32, extended: bool) -> TScriptConfig {
     )
     .expect("decoders build");
     TScriptConfig {
+        stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
         channels: vec![CanChannel {
@@ -164,6 +167,7 @@ pub(super) fn standalone_config(can_id: u32, extended: bool) -> TScriptConfig {
         }],
         pretrigger_ms: 200,
         signals: vec![SignalHook {
+            stop: None,
             message: MessageRef::Id { can_id, extended },
             trigger: Some(TriggerCondition {
                 signals: crate::inline_trigger_signals(&decoders),

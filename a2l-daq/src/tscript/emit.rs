@@ -29,8 +29,10 @@ pub fn generate_tscript(config: &TScriptConfig) -> String {
     if let Some(init) = &config.daq_init {
         out.push_str(&daq_functions_block(config, init));
     }
+    out.push_str(&end_daq_function(config));
     out.push_str(&on_start_block(config));
     out.push_str(&signal_hook_block(config));
+    out.push_str(&stop_frame_blocks(config));
     if config.timer_ms.is_some() {
         out.push_str(&log_timer_block(config));
     }
@@ -95,6 +97,19 @@ fn behaviour_lines(config: &TScriptConfig) -> String {
             "Starts the logger when the trigger condition is true and keeps it running.\n",
         );
     }
+    if config.signals.iter().any(|h| h.stop.is_some()) {
+        out.push_str("Stops logging and DAQ for good when the stop condition is true.\n");
+    }
+    if let Some(id) = config.stop_can_id {
+        let _ = writeln!(
+            out,
+            "Stops logging and DAQ for good when a frame with CAN id 0x{id:X} arrives."
+        );
+    }
+    out.push_str("Stopping the script stops DAQ too. If the logger loses power or is unplugged while DAQ runs,\n");
+    out.push_str(
+        "the ECU keeps sending DAQ frames until it is stopped by other means or restarts.\n",
+    );
     if config.daq_init.is_some() {
         let _ = writeln!(
             out,
@@ -143,6 +158,7 @@ fn variables_block(config: &TScriptConfig) -> String {
         let _ = writeln!(out, "    const int INIT_STATES = {};", init.commands.len());
     }
     let _ = writeln!(out, "    int logging = 0;");
+    let _ = writeln!(out, "    int daq_ended = 0;");
     if config.daq_init.is_some() {
         let _ = writeln!(out, "    int count = 0;");
         // -1 while a restart is pending: responses then belong to no command
@@ -173,15 +189,82 @@ fn variables_block(config: &TScriptConfig) -> String {
 fn all_trigger_signals(config: &TScriptConfig) -> Vec<TriggerSignal> {
     let mut signals: Vec<TriggerSignal> = Vec::new();
     for hook in &config.signals {
-        if let Some(trigger) = &hook.trigger {
-            for s in &trigger.signals {
-                if !signals.iter().any(|existing| existing.ident == s.ident) {
-                    signals.push(s.clone());
-                }
+        for s in hook_signals(hook) {
+            if !signals.iter().any(|existing| existing.ident == s.ident) {
+                signals.push(s);
             }
         }
     }
     signals
+}
+
+/// The signals one hook depend on
+fn hook_signals(hook: &SignalHook) -> Vec<TriggerSignal> {
+    let mut signals: Vec<TriggerSignal> = Vec::new();
+    for s in hook
+        .trigger
+        .iter()
+        .chain(&hook.stop)
+        .flat_map(|c| &c.signals)
+    {
+        if !signals.iter().any(|existing| existing.ident == s.ident) {
+            signals.push(s.clone());
+        }
+    }
+    signals
+}
+
+/// Stop DAQ and logging status. Called after the last capture, by the stop condition or stop frame, and when the script stops.
+fn end_daq_function(config: &TScriptConfig) -> String {
+    let mut out = String::from("void endDaq() {\n");
+    out.push_str("    if (daq_ended == 1) { return; }\n");
+    out.push_str("    daq_ended = 1;\n");
+    out.push_str("    if (loggerStatus() == LOGGER_STATE_LOGGING) {\n");
+    out.push_str("        printf(\"Stopping logger...\\n\");\n");
+    out.push_str("        loggerStop();\n");
+    out.push_str("    }\n");
+    if config.timer_ms.is_some() {
+        out.push_str("    timerCancel(logTimer);\n");
+    }
+    if let Some(init) = &config.daq_init {
+        out.push_str("    timerCancel(daqTimeout);\n");
+        out.push_str("    timerCancel(initRestart);\n");
+        if config.daq_watchdog_ms.is_some() {
+            out.push_str("    timerCancel(daqWatchdog);\n");
+        }
+        out.push_str("    init_state = -1;\n");
+        if !init.stop_commands.is_empty() {
+            out.push_str("    printf(\"Stopping DAQ\\n\");\n");
+            out.push_str("    sendDaqStop(master_id);\n");
+        }
+    }
+    out.push_str("}\n\n");
+    out
+}
+
+/// The hooks for the stop frame
+fn stop_frame_blocks(config: &TScriptConfig) -> String {
+    let Some(can_id) = config.stop_can_id else {
+        return String::new();
+    };
+    let selector = MessageRef::Id {
+        can_id,
+        extended: can_id > 0x7FF,
+    }
+    .hook_selector();
+    let kinds: &[&str] = if config.can_fd {
+        &["CanMessage", "CanMessageFd"]
+    } else {
+        &["CanMessage"]
+    };
+    let mut out = String::new();
+    for kind in kinds {
+        let _ = writeln!(out, "on {kind}<*> {selector} {{");
+        let _ = writeln!(out, "    printf(\"Stop frame 0x{can_id:X} received\\n\");");
+        out.push_str("    endDaq();\n");
+        out.push_str("}\n\n");
+    }
+    out
 }
 
 /// The `send`/`sendDaqCommand`/`sendDaqStop` functions that drive the DAQ-init state machine.
@@ -430,14 +513,25 @@ fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
         out.push_str("    }\n");
     }
 
-    // DAQ message trigger condition.
-    if let Some(trigger) = &hook.trigger {
+    // DAQ message condition
+    if hook.trigger.is_some() || hook.stop.is_some() {
         let indent = if has_init { "        " } else { "    " };
         if has_init {
             out.push_str("    else {\n");
         }
 
-        out.push_str(&latch_block(&trigger.signals, indent));
+        out.push_str(&latch_block(&hook_signals(hook), indent));
+        let _ = writeln!(out, "{indent}if (daq_ended == 1) {{ return; }}");
+        if let Some(stop) = &hook.stop {
+            let _ = writeln!(out, "{indent}if ({}) {{", condition_expression(stop));
+            let _ = writeln!(out, "{indent}    printf(\"Stop condition met\\n\");");
+            let _ = writeln!(out, "{indent}    endDaq();");
+            let _ = writeln!(out, "{indent}    return;");
+            let _ = writeln!(out, "{indent}}}");
+        }
+    }
+    if let Some(trigger) = &hook.trigger {
+        let indent = if has_init { "        " } else { "    " };
         let _ = writeln!(out, "{indent}if (logging == 1) {{ return; }}");
         let _ = writeln!(out, "{indent}if ({}) {{", condition_expression(trigger));
         if config.timer_ms.is_some() {
@@ -466,15 +560,16 @@ fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
             let _ = writeln!(out, "{indent}    logging = 1;");
         }
         let _ = writeln!(out, "{indent}}}");
-        if has_init {
-            out.push_str("    }\n");
-        }
+    }
+    if has_init && (hook.trigger.is_some() || hook.stop.is_some()) {
+        out.push_str("    }\n");
     }
     out.push_str("}\n\n");
     out
 }
 
 /// The `on Timer logTimer` hook: stop the logger once the post-trigger timer expires, and DAQ after the last capture.
+/// 
 /// Only emitted when `config.timer_ms` is `Some`.
 fn log_timer_block(config: &TScriptConfig) -> String {
     let mut out = String::new();
@@ -488,21 +583,14 @@ fn log_timer_block(config: &TScriptConfig) -> String {
     if config.max_captures.is_some() {
         out.push_str("    if (captures >= MAX_CAPTURES) {\n");
         out.push_str("        printf(\"Last capture done\\n\");\n");
-        if let Some(init) = &config.daq_init {
-            if config.daq_watchdog_ms.is_some() {
-                out.push_str("        timerCancel(daqWatchdog);\n");
-            }
-            if !init.stop_commands.is_empty() {
-                out.push_str("        sendDaqStop(master_id);\n");
-            }
-        }
+        out.push_str("        endDaq();\n");
         out.push_str("    }\n");
     }
     out.push_str("}\n\n");
     out
 }
 
-/// The DAQ init's timers: `daqTimeout` resends the current command up to [`DAQ_INIT_MAX_RETRIES`] times
+/// `daqTimeout` resends the current command up to [`DAQ_INIT_MAX_RETRIES`] times
 /// before the init starts over, `initRestart` starts it over, and `daqWatchdog` restarts it when DAQ frames stop arriving.
 fn daq_timer_blocks(config: &TScriptConfig) -> String {
     let mut out = String::new();
@@ -546,12 +634,12 @@ fn daq_timer_blocks(config: &TScriptConfig) -> String {
     out
 }
 
-/// The `on stop`/`on exception` hooks: fixed regardless of config.
+/// The `on stop`/`on exception` hooks. Stopping the script stops DAQ too.
 fn stop_and_exception_block() -> String {
     let mut out = String::new();
     out.push_str("on stop {\n");
     out.push_str("    printf(\"Stopping script...\\n\");\n");
-    out.push_str("    loggerStop();\n");
+    out.push_str("    endDaq();\n");
     out.push_str("}\n\n");
     out.push_str("on exception {\n");
     out.push_str(
@@ -605,6 +693,7 @@ mod tests {
     #[test]
     fn generates_basic_tscript() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![
@@ -621,6 +710,7 @@ mod tests {
             ],
             pretrigger_ms: 200,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("PowertrainStatus".into()),
                 trigger: Some(TriggerCondition {
                     signals: vec![signal("EngineSpeed", 0, "this.EngineSpeed.Phys")],
@@ -654,6 +744,7 @@ mod tests {
     #[test]
     fn traceability_lines_appear_in_header() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -663,6 +754,7 @@ mod tests {
             }],
             pretrigger_ms: 0,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("DAQ".into()),
                 trigger: None,
                 handles_responses: true,
@@ -683,6 +775,7 @@ mod tests {
     #[test]
     fn generates_can_fd_bus_config_and_frame_flags() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -692,6 +785,7 @@ mod tests {
             }],
             pretrigger_ms: 200,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("Test".into()),
                 trigger: None,
                 handles_responses: true,
@@ -723,6 +817,7 @@ mod tests {
     #[test]
     fn multi_signal_trigger_expression_emitted_correctly() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -732,6 +827,7 @@ mod tests {
             }],
             pretrigger_ms: 0,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("DAQ".into()),
                 trigger: Some(TriggerCondition {
                     signals: vec![
@@ -771,6 +867,7 @@ mod tests {
     #[test]
     fn no_xcp_init_omits_response_handler() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -780,6 +877,7 @@ mod tests {
             }],
             pretrigger_ms: 200,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("DAQ".into()),
                 trigger: Some(TriggerCondition {
                     signals: vec![signal("Speed", 0, "this.Speed.Phys")],
@@ -806,6 +904,7 @@ mod tests {
     #[test]
     fn classic_can_omits_fd_calls() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -815,6 +914,7 @@ mod tests {
             }],
             pretrigger_ms: 200,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("Test".into()),
                 trigger: None,
                 handles_responses: true,
@@ -834,6 +934,7 @@ mod tests {
     #[test]
     fn generates_xcp_init_state_machine() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -843,6 +944,7 @@ mod tests {
             }],
             pretrigger_ms: 200,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("Test".into()),
                 trigger: None,
                 handles_responses: true,
@@ -1105,6 +1207,7 @@ mod tests {
             ("Temp".to_string(), Accessor::Phys),
         ];
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -1114,6 +1217,7 @@ mod tests {
             }],
             pretrigger_ms: 0,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("DAQ".into()),
                 trigger: Some(TriggerCondition {
                     signals: dbc_trigger_signals(&project, &daq_lists, &reads).unwrap(),
@@ -1175,6 +1279,7 @@ mod tests {
     #[test]
     fn dbc_script_still_documents_the_dbase_argument() {
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -1184,6 +1289,7 @@ mod tests {
             }],
             pretrigger_ms: 0,
             signals: vec![SignalHook {
+                stop: None,
                 message: MessageRef::Dbc("DAQ".into()),
                 trigger: None,
                 handles_responses: true,
@@ -1360,10 +1466,12 @@ mod tests {
             &daq_lists,
             Protocol::Xcp,
             Some((&resolved, TriggerAction::StartLogger)),
+            None,
         )
         .unwrap();
 
         let config = TScriptConfig {
+            stop_can_id: None,
             max_captures: None,
             daq_watchdog_ms: None,
             channels: vec![CanChannel {
@@ -1501,8 +1609,7 @@ mod tests {
             .split("if (captures >= MAX_CAPTURES) {")
             .nth(1)
             .expect(&t);
-        assert!(last.contains("timerCancel(daqWatchdog);"), "got:\n{t}");
-        assert!(last.contains("sendDaqStop(master_id);"), "got:\n{t}");
+        assert!(last.contains("endDaq();"), "got:\n{t}");
         assert!(
             t.contains("after capture 3 the script stops DAQ on the ECU"),
             "header, got:\n{t}"
@@ -1544,5 +1651,106 @@ mod tests {
         let without = generate_tscript(&timed_config(None, None));
         assert!(!without.contains("daqWatchdog"), "got:\n{without}");
         assert!(!without.contains("daq_seen"), "got:\n{without}");
+    }
+
+    fn function_body<'a>(t: &'a str, head: &str) -> &'a str {
+        t.split(head)
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .unwrap_or_else(|| panic!("no `{head}` in:\n{t}"))
+    }
+
+    #[test]
+    fn end_daq_stops_everything_once() {
+        let t = generate_tscript(&timed_config(Some(2), Some(2000)));
+        let end = function_body(&t, "void endDaq() {");
+        assert!(
+            end.contains("if (daq_ended == 1) { return; }\n    daq_ended = 1;"),
+            "got:\n{t}"
+        );
+        for line in [
+            "loggerStop();",
+            "timerCancel(logTimer);",
+            "timerCancel(daqTimeout);",
+            "timerCancel(initRestart);",
+            "timerCancel(daqWatchdog);",
+            "init_state = -1;",
+            "sendDaqStop(master_id);",
+        ] {
+            assert!(end.contains(line), "endDaq lacks {line}:\n{t}");
+        }
+        assert!(
+            function_body(&t, "on stop {").contains("endDaq();"),
+            "stopping the script stops DAQ, got:\n{t}"
+        );
+    }
+
+    #[test]
+    fn a_stop_condition_ends_daq_before_the_trigger_is_checked() {
+        let mut config = timed_config(None, None);
+        config.signals[0].stop = Some(TriggerCondition {
+            signals: vec![signal("Temp", 2, "this.Temp.Phys")],
+            comparisons: vec![Comparison {
+                ident: "Temp".into(),
+                op: CompareOp::Ge,
+                value: "110".into(),
+            }],
+            action: TriggerAction::StopLogger,
+        });
+        let t = generate_tscript(&config);
+        assert!(
+            t.contains("float val_Temp = 0;"),
+            "stop signals are latched, got:\n{t}"
+        );
+        assert!(t.contains("if (this.data[0] == 0x02) {"), "got:\n{t}");
+        let ended = t.find("if (daq_ended == 1) { return; }").expect(&t);
+        let stop = t
+            .find("if (got_Temp == 1 && val_Temp >= 110) {\n            printf(\"Stop condition met\\n\");\n            endDaq();\n            return;")
+            .expect(&t);
+        let trigger = t.find("if (got_Rpm == 1 && val_Rpm > 3000) {").expect(&t);
+        assert!(ended < stop && stop < trigger, "got:\n{t}");
+        assert!(
+            t.contains("Stops logging and DAQ for good when the stop condition is true."),
+            "got:\n{t}"
+        );
+
+        config.signals[0].trigger = None;
+        let only_stop = generate_tscript(&config);
+        assert!(
+            only_stop.contains("endDaq();\n            return;"),
+            "got:\n{only_stop}"
+        );
+        assert!(!only_stop.contains("armed == 1"), "got:\n{only_stop}");
+    }
+
+    #[test]
+    fn a_stop_frame_ends_daq_on_classic_and_fd_frames() {
+        let mut config = timed_config(None, None);
+        config.stop_can_id = Some(0x123);
+        let classic = generate_tscript(&config);
+        assert!(
+            classic.contains("on CanMessage<*> (0x123) {\n    printf(\"Stop frame 0x123 received\\n\");\n    endDaq();\n}"),
+            "got:\n{classic}"
+        );
+        assert!(
+            !classic.contains("on CanMessageFd<*> (0x123)"),
+            "got:\n{classic}"
+        );
+
+        config.can_fd = true;
+        config.stop_can_id = Some(0x18FF_0001);
+        let fd = generate_tscript(&config);
+        assert!(
+            fd.contains("on CanMessage<*> (0x18FF0001)x {"),
+            "got:\n{fd}"
+        );
+        assert!(
+            fd.contains("on CanMessageFd<*> (0x18FF0001)x {"),
+            "got:\n{fd}"
+        );
+        assert!(
+            fd.contains("when a frame with CAN id 0x18FF0001 arrives"),
+            "got:\n{fd}"
+        );
     }
 }

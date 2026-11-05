@@ -13,6 +13,7 @@ Requires Kvaser CanKing 7.6 or later.
 - Added a warning when the A2L uses keywords that change the results but are not read, such as /include or a relative PID field
 - t-script: a timed capture can repeat, each time the trigger condition turns from false to true, with an optional limit on the number of captures
 - t-script: the DAQ setup starts over when the ECU stops answering, and optionally when no DAQ frames arrive for a set time
+- t-script: added a stop condition and a stop frame CAN id that end logging and DAQ for good; stopping the script stops DAQ too
 - XCP commands in generated t-scripts are padded to 8 bytes, or to MAX_DLC on CAN FD, when the A2L sets MAX_DLC_REQUIRED; CCP commands are always 8 bytes
 - Fixed a timed t-script capturing only once, because stopping the logger also stopped DAQ on the ECU
 - Fixed a signal sharing an ODT entry with part of a split signal being decoded from the wrong bytes in the DBC, the t-script and the data processor

@@ -252,6 +252,10 @@ interface generator {
     daq-watchdog-ms: option<u32>,
     /// Start-logger trigger conditions; empty = no signal trigger.
     conditions: list<trigger-condition>,
+    /// Stop logging and DAQ for good when these all hold; empty = no stop condition.
+    stop-conditions: list<trigger-condition>,
+    /// Stop logging and DAQ for good when a frame with this CAN id arrives (none = no stop frame).
+    stop-can-id: option<u32>,
     /// Manual bus-parameter override; none = derive bus params from the A2L.
     bus: option<bus-override>,
     /// Whether the script reads signals through the DBC or decodes them itself.

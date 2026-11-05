@@ -171,12 +171,43 @@ impl bindings::Guest for Component {
                 Some((resolved, crate::TriggerAction::StartLogger))
             };
 
+        let stop_terms = trigger_terms(&options.stop_conditions)?;
+        let resolved_stop = if stop_terms.is_empty() {
+            None
+        } else {
+            Some(
+                crate::resolve_terms(
+                    &stop_terms,
+                    inline,
+                    &project,
+                    &core.daq_lists,
+                    default_can_id.unwrap_or(0),
+                )
+                .map_err(|e| format!("stop condition: {e}"))?,
+            )
+        };
+        if let Some(id) = options.stop_can_id
+            && let Some(why) = crate::stop_can_id_conflict(id, &project, &core.daq_lists, proto)
+        {
+            return Err(why);
+        }
+
         let combo = resolved_trigger.as_ref().map(|(r, a)| (r, *a));
-        let signals = crate::resolve_signal_hooks(inline, &project, &core.daq_lists, proto, combo)
-            .map_err(|e| format!("cannot decode signals in the script: {e}"))?;
-        let decoders = resolved_trigger
-            .map(|(r, _)| r.decoders)
-            .unwrap_or_default();
+        let signals = crate::resolve_signal_hooks(
+            inline,
+            &project,
+            &core.daq_lists,
+            proto,
+            combo,
+            resolved_stop.as_ref(),
+        )
+        .map_err(|e| format!("cannot decode signals in the script: {e}"))?;
+        let decoders = crate::merge_decoders(
+            resolved_trigger
+                .map(|(r, _)| r.decoders)
+                .unwrap_or_default(),
+            resolved_stop.map(|r| r.decoders).unwrap_or_default(),
+        );
 
         let config = crate::TScriptConfig {
             channels: vec![crate::CanChannel {
@@ -189,6 +220,7 @@ impl bindings::Guest for Component {
             timer_ms: options.timer_ms,
             max_captures: options.max_captures,
             daq_watchdog_ms: options.daq_watchdog_ms,
+            stop_can_id: options.stop_can_id,
             daq_init: crate::build_daq_init(
                 proto,
                 &project,

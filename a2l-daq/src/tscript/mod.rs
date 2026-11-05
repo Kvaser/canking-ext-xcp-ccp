@@ -4,8 +4,7 @@
 //! `inline_signals` generates decoder functions for scripts that carry no DBC, and
 //! `trigger_expr` parses a textual trigger expression into terms.
 //!
-//! This module holds the configuration those parts consume, plus the helpers that derive
-//! it from a parsed A2L.
+//! This module holds the configuration those parts consume, plus the helpers that derive it from a parsed A2L.
 
 mod emit;
 mod inline_signals;
@@ -42,6 +41,7 @@ pub struct TScriptConfig {
     pub channels: Vec<CanChannel>,
     /// How many ms of bus traffic to keep either side of the logger starting/stopping.
     pub pretrigger_ms: u32,
+    /// What signals the script triggers on.
     pub signals: Vec<SignalHook>,
     /// Stop logging this many ms after the trigger fires. `None` leaves the logger running.
     pub timer_ms: Option<u32>,
@@ -49,6 +49,8 @@ pub struct TScriptConfig {
     pub max_captures: Option<u32>,
     /// Start the DAQ init over when no DAQ frame arrives for this many ms. `None` disables the watchdog.
     pub daq_watchdog_ms: Option<u32>,
+    /// Stop logging and DAQ for good when a frame with this CAN id arrives.
+    pub stop_can_id: Option<u32>,
     /// The DAQ initialisation state machine to drive, when the script is to bring the ECU up itself.
     pub daq_init: Option<DaqInit>,
     pub can_fd: bool,
@@ -137,6 +139,8 @@ pub fn bus_defaults(project: &A2lProject, protocol: Protocol) -> BusDefaults {
 pub struct SignalHook {
     pub message: MessageRef,
     pub trigger: Option<TriggerCondition>,
+    /// When it holds, the script stops logging and DAQ for good.
+    pub stop: Option<TriggerCondition>,
     pub handles_responses: bool,
 }
 
@@ -158,7 +162,7 @@ impl MessageRef {
     }
 }
 
-/// Resolve the `on CanMessage` hooks the script needs, and split `trigger` across them.
+/// Resolve the `on CanMessage` hooks the script needs, and split `trigger` and `stop` across them.
 ///
 /// Returns an error naming the missing CAN id if `inline` is requested but the A2L declares none.
 pub fn resolve_signal_hooks(
@@ -167,16 +171,18 @@ pub fn resolve_signal_hooks(
     daq_lists: &[DaqList],
     protocol: Protocol,
     trigger: Option<(&ResolvedTrigger, TriggerAction)>,
+    stop: Option<&ResolvedTrigger>,
 ) -> Result<Vec<SignalHook>, String> {
     if !inline {
-        let hook_trigger = trigger.map(|(r, action)| TriggerCondition {
+        let condition = |r: &ResolvedTrigger, action| TriggerCondition {
             signals: r.signals.clone(),
             comparisons: r.comparisons.clone(),
             action,
-        });
+        };
         return Ok(vec![SignalHook {
             message: MessageRef::Dbc("DAQ".to_string()),
-            trigger: hook_trigger,
+            trigger: trigger.map(|(r, action)| condition(r, action)),
+            stop: stop.map(|r| condition(r, TriggerAction::StopLogger)),
             handles_responses: true,
         }]);
     }
@@ -195,21 +201,66 @@ pub fn resolve_signal_hooks(
     Ok(ids
         .into_iter()
         .map(|can_id| {
-            let hook_trigger = trigger.map(|(r, action)| TriggerCondition {
+            let condition = |r: &ResolvedTrigger, action| TriggerCondition {
                 signals: signals_for_can_id(&r.signals, &r.decoders, can_id),
                 comparisons: r.comparisons.clone(),
                 action,
-            });
+            };
             SignalHook {
                 message: MessageRef::Id {
                     can_id,
                     extended: can_id > 0x7FF,
                 },
-                trigger: hook_trigger,
+                trigger: trigger.map(|(r, action)| condition(r, action)),
+                stop: stop.map(|r| condition(r, TriggerAction::StopLogger)),
                 handles_responses: can_id == default_id,
             }
         })
         .collect())
+}
+
+/// Why `can_id` can't be the stop frame: the script already receives DAQ data or sends commands on it.
+pub fn stop_can_id_conflict(
+    can_id: u32,
+    project: &A2lProject,
+    daq_lists: &[DaqList],
+    protocol: Protocol,
+) -> Option<String> {
+    let daq_ids = crate::layout::daq_can_id(project, protocol)
+        .map(|default| {
+            let mut ids: Vec<u32> = crate::layout::group_by_can_id(daq_lists, default)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            ids.push(default);
+            ids
+        })
+        .unwrap_or_default();
+    let command_id = match protocol {
+        Protocol::Xcp => project
+            .xcp_data
+            .as_ref()
+            .and_then(|x| x.xcp_info.as_ref())
+            .and_then(|info| info.can_id_master),
+        Protocol::Ccp => project.ccp_data.as_ref().map(|c| c.info.cro_id),
+    };
+    if daq_ids.contains(&can_id) {
+        Some(format!("stop frame id 0x{can_id:X} carries DAQ data"))
+    } else if command_id == Some(can_id) {
+        Some(format!("stop frame id 0x{can_id:X} is the command id"))
+    } else {
+        None
+    }
+}
+
+/// Every decoder in `a` and `b`, once each.
+pub fn merge_decoders(mut a: Vec<SignalDecoder>, b: Vec<SignalDecoder>) -> Vec<SignalDecoder> {
+    for d in b {
+        if !a.iter().any(|existing| existing.ident == d.ident) {
+            a.push(d);
+        }
+    }
+    a
 }
 
 /// The trigger signals whose decoder reads a frame carried on `can_id`.
@@ -370,6 +421,7 @@ mod tests {
             &daq_lists,
             Protocol::Xcp,
             Some((&resolved, TriggerAction::StartLogger)),
+            None,
         )
         .expect("both DAQ lists have a resolvable CAN id");
 
@@ -418,6 +470,7 @@ mod tests {
             &daq_lists,
             Protocol::Xcp,
             Some((&resolved, TriggerAction::StartLogger)),
+            None,
         )
         .expect("DBC mode never needs a CAN id");
 
@@ -425,5 +478,24 @@ mod tests {
         assert!(matches!(hooks[0].message, MessageRef::Dbc(ref name) if name == "DAQ"));
         assert!(hooks[0].handles_responses);
         assert_eq!(hooks[0].trigger.as_ref().unwrap().signals.len(), 2);
+    }
+
+    #[test]
+    fn a_stop_frame_may_not_reuse_a_daq_or_command_id() {
+        let project = crate::parse_a2l(
+            r#"
+            /begin MEASUREMENT Rpm "" UWORD NO_COMPU_METHOD 0 0 0 8000 ECU_ADDRESS 0x1000 /end MEASUREMENT
+            /begin IF_DATA XCP
+              /begin XCP_ON_CAN 0x0105 CAN_ID_MASTER 0x0455 CAN_ID_SLAVE 0x0456 BAUDRATE 500000 /end XCP_ON_CAN
+              /begin DAQ DYNAMIC /begin DAQ_LIST 0x0000 MAX_ODT 0x05 MAX_ODT_ENTRIES 0x07 /end DAQ_LIST /end DAQ
+            /end IF_DATA
+            "#,
+            &[],
+        )
+        .unwrap();
+        let conflict = |id| stop_can_id_conflict(id, &project, &[], Protocol::Xcp);
+        assert!(conflict(0x456).unwrap().contains("DAQ data"));
+        assert!(conflict(0x455).unwrap().contains("command id"));
+        assert_eq!(conflict(0x123), None);
     }
 }

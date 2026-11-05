@@ -308,7 +308,7 @@ fn prompt_tscript_config(
     };
     // 0 is no limit / no watchdog
     let max_captures = timer_ms
-        .map(|_| prompt_parse("  Captures before DAQ stops (0 = no limit) [0]: ", 0u32))
+        .map(|_| prompt_parse("  Captures before DAQ stops (0 = no limit) [1]: ", 1u32))
         .filter(|&n| n > 0);
     let daq_watchdog_ms = Some(prompt_parse(
         "Restart the DAQ init after this many ms without a DAQ frame (0 = never) [10000]: ",
@@ -369,7 +369,38 @@ fn prompt_tscript_config(
         }
     };
 
+    let stop_expr = prompt_line(
+        "Stop expression: stops logging and DAQ for good when true (same syntax, empty to skip): ",
+    );
+    let stop_can_id = loop {
+        let line = prompt_line(
+            "Stop frame CAN id: stops for good when it arrives (0x... or decimal, empty for none): ",
+        );
+        if line.is_empty() {
+            break None;
+        }
+        let parsed = match line.strip_prefix("0x").or_else(|| line.strip_prefix("0X")) {
+            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+            None => line.parse().ok(),
+        };
+        match parsed.filter(|&id| id <= 0x1FFF_FFFF) {
+            Some(id) => match a2l_daq::stop_can_id_conflict(id, project, daq_lists, protocol) {
+                Some(why) => eprintln!("{why}; pick another id."),
+                None => break Some(id),
+            },
+            None => eprintln!("Not a CAN id: {line}"),
+        }
+    };
+
     let default_can_id = a2l_daq::layout::daq_can_id(project, protocol).unwrap_or(0);
+    let stop_resolved: Option<ResolvedTrigger> = if stop_expr.is_empty() {
+        None
+    } else {
+        let expr = expand_signal_indices(&stop_expr, &signal_names);
+        build_trigger(&expr, standalone, project, daq_lists, default_can_id)
+            .map_err(|e| eprintln!("\nStop condition dropped: {e}"))
+            .ok()
+    };
 
     let trigger_resolved: Option<(ResolvedTrigger, TriggerAction)> = match asked {
         None => None,
@@ -417,27 +448,41 @@ fn prompt_tscript_config(
     };
 
     let combo = trigger_resolved.as_ref().map(|(r, a)| (r, *a));
-    let signals = resolve_signal_hooks(standalone, project, daq_lists, protocol, combo)
-        .unwrap_or_else(|e| {
-            eprintln!("Cannot build a standalone script: {e}. Falling back to DBC mode.");
-            let trigger = trigger_resolved.as_ref().map(|(r, a)| TriggerCondition {
-                signals: r.signals.clone(),
-                comparisons: r.comparisons.clone(),
-                action: *a,
-            });
-            vec![SignalHook {
-                message: MessageRef::Dbc(String::from("DAQ")),
-                trigger,
-                handles_responses: true,
-            }]
-        });
-    let decoders = trigger_resolved
-        .map(|(r, _)| r.decoders)
-        .unwrap_or_default();
+    let signals = resolve_signal_hooks(
+        standalone,
+        project,
+        daq_lists,
+        protocol,
+        combo,
+        stop_resolved.as_ref(),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Cannot build a standalone script: {e}. Falling back to DBC mode.");
+        let condition = |r: &ResolvedTrigger, action| TriggerCondition {
+            signals: r.signals.clone(),
+            comparisons: r.comparisons.clone(),
+            action,
+        };
+        vec![SignalHook {
+            message: MessageRef::Dbc(String::from("DAQ")),
+            trigger: trigger_resolved.as_ref().map(|(r, a)| condition(r, *a)),
+            stop: stop_resolved
+                .as_ref()
+                .map(|r| condition(r, TriggerAction::StopLogger)),
+            handles_responses: true,
+        }]
+    });
+    let decoders = a2l_daq::merge_decoders(
+        trigger_resolved
+            .map(|(r, _)| r.decoders)
+            .unwrap_or_default(),
+        stop_resolved.map(|r| r.decoders).unwrap_or_default(),
+    );
 
     TScriptConfig {
         max_captures,
         daq_watchdog_ms,
+        stop_can_id,
         channels: vec![CanChannel {
             index: channel_index,
             bitrate,

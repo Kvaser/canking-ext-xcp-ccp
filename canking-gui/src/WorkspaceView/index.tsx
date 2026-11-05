@@ -49,6 +49,10 @@ import {
 
 const DIALOG_TITLE = 'DAQ Configurator';
 
+/** The filled-in conditions */
+const toWitConditions = (conditions: TriggerCondition[]) =>
+  conditions.filter(c => c.signal !== '').map(c => ({ signal: c.signal, op: c.operator, value: c.value }));
+
 const STEPS = ['Load A2L', 'Select signals', 'Assign events', 'Configure t-script', 'Apply & export'];
 
 interface A2lFile {
@@ -104,6 +108,11 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     'triggerConditions',
     [],
   );
+  const [stopConditions, setStopConditions, stopConditionsLoaded] = useProjectDataSlice<TriggerCondition[]>(
+    id,
+    'stopConditions',
+    [],
+  );
   const [tscriptOptions, setTscriptOptions, tscriptOptionsLoaded] = useProjectDataSlice<TScriptOptions>(
     id,
     'tscriptOptions',
@@ -143,6 +152,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     signalEventsLoaded &&
     startDaqLoaded &&
     conditionsLoaded &&
+    stopConditionsLoaded &&
     tscriptOptionsLoaded &&
     protocolLoaded &&
     processorNameLoaded &&
@@ -300,12 +310,15 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
       const daqWatchdogMs = parseOptionalPositiveInt(
         tscriptOptions.watchdogMs ?? DEFAULT_TSCRIPT_OPTIONS.watchdogMs ?? '',
       );
+      const stopCanIdText = (tscriptOptions.stopCanId ?? '').trim();
+      const stopCanId = stopCanIdText === '' ? undefined : parseCanId(stopCanIdText);
       if (
         channelIndex === null ||
         pretriggerMs === null ||
         timerMs === null ||
         maxCaptures === null ||
-        daqWatchdogMs === null
+        daqWatchdogMs === null ||
+        stopCanId === null
       ) {
         setTscript('');
         warningLines.push('t-script not generated: invalid t-script options (see the T-script section)');
@@ -322,13 +335,9 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
               timerMs,
               maxCaptures,
               daqWatchdogMs,
-              conditions: conditions
-                .filter(c => c.signal !== '')
-                .map(c => ({
-                  signal: c.signal,
-                  op: c.operator,
-                  value: c.value,
-                })),
+              conditions: toWitConditions(conditions),
+              stopConditions: toWitConditions(stopConditions),
+              stopCanId,
               bus: tscriptOptions.bus.enabled
                 ? {
                     mode: tscriptOptions.bus.mode,
@@ -419,6 +428,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     activeProtocol,
     startDaq,
     conditions,
+    stopConditions,
     tscriptOptions,
     measurementSetup,
     processorName,
@@ -702,7 +712,34 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                   signalNames={selectedSignals}
                   conditions={conditions}
                   onConditionsChange={setConditions}
+                  description="Starts the logger. Conditions are combined with AND (e.g. Rpm > 2500)."
                 />
+              </SectionControl>
+
+              <SectionControl text="T-script · Stop">
+                <TriggerSection
+                  signalNames={selectedSignals}
+                  conditions={stopConditions}
+                  onConditionsChange={setStopConditions}
+                  description="Stops logging and DAQ for good when all conditions hold, or when the stop frame arrives."
+                />
+                <TextField
+                  size="small"
+                  label="Stop frame CAN id"
+                  placeholder="none"
+                  value={tscriptOptions.stopCanId ?? ''}
+                  error={
+                    (tscriptOptions.stopCanId ?? '').trim() !== '' &&
+                    parseCanId(tscriptOptions.stopCanId ?? '') === null
+                  }
+                  helperText="Any frame with this id, e.g. a button or tester message. Hex with 0x, or decimal."
+                  onChange={e => setTscriptOptions({ ...tscriptOptions, stopCanId: e.target.value })}
+                  sx={{ width: 360, mt: 2, mb: 1 }}
+                />
+                <Typography variant="caption" color="text.secondary" component="p">
+                  DAQ also stops after the last capture and when the script is stopped. If the logger loses power or is
+                  unplugged while DAQ runs, the ECU keeps sending until something else stops it or it restarts.
+                </Typography>
               </SectionControl>
 
               <SectionControl text="T-script · Logging options">

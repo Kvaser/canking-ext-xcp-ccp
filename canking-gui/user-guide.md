@@ -40,14 +40,21 @@ Options for the downloadable t-script:
 
 - **CAN bus**: override the A2L's bit rate and CAN FD settings.
 - **Trigger**: signal, operator and value. Several conditions must all hold.
+- **Stop**: conditions in the same form, and a **Stop frame CAN id**. When the conditions hold or a frame with that id
+  arrives (for example a button or tester message on the bus), the script stops logging and stops DAQ on the ECU for
+  good.
 - **Logging**: CAN channel, pretrigger time, and **Stop logging after** a time.
-- **Captures** (with a stop time): after each capture the script waits until the trigger condition has been false, and
-  starts the next capture when it turns true again. DAQ keeps running in between. After the last capture the script
-  stops DAQ on the ECU. Leave it blank for no limit.
+- **Captures** (with a stop time, default 1): after each capture the script waits until the trigger condition has been
+  false, and starts the next capture when it turns true again. DAQ keeps running in between. After the last capture the
+  script stops DAQ on the ECU. Leave it blank for no limit.
 - **Restart DAQ after silence**: if no DAQ frame arrives for this long, for example because the ECU restarted, the
   script sets up DAQ again. Leave it blank to never do that. A DAQ setup the ECU doesn't answer always starts over
   after 5 seconds.
 - **Standalone t-script**: the script decodes the signals itself, so it compiles without the DBC.
+
+DAQ on the ECU only stops when the script tells it to: after the last capture, on the stop condition or stop frame, or
+when the script is stopped. If the logger loses power or is unplugged while DAQ runs, the ECU keeps sending DAQ frames
+until something else stops it or it restarts, much like a car left running.
 
 ### Apply & export
 

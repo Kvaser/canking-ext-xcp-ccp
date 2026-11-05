@@ -41,6 +41,7 @@ fn build_script(triggers: &[(&str, &str, &str)]) -> String {
     let config = TScriptConfig {
         max_captures: Some(3),
         daq_watchdog_ms: Some(2000),
+        stop_can_id: Some(0x123),
         channels: vec![CanChannel {
             index: 0,
             bitrate: 500_000,
@@ -48,6 +49,15 @@ fn build_script(triggers: &[(&str, &str, &str)]) -> String {
         }],
         pretrigger_ms: 200,
         signals: vec![SignalHook {
+            stop: Some(TriggerCondition {
+                signals: inline_trigger_signals(&decoders),
+                comparisons: vec![Comparison {
+                    ident: a2l_daq::sanitize_name(triggers[0].0),
+                    op: CompareOp::Lt,
+                    value: "0".to_string(),
+                }],
+                action: TriggerAction::StopLogger,
+            }),
             message: MessageRef::Id {
                 can_id,
                 extended: can_id > 0x7FF,
@@ -198,6 +208,7 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         })
         .collect();
     let config = TScriptConfig {
+        stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
         channels: vec![CanChannel {
@@ -207,6 +218,7 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         }],
         pretrigger_ms: 0,
         signals: vec![SignalHook {
+            stop: None,
             message: MessageRef::Id {
                 can_id,
                 extended: can_id > 0x7FF,
@@ -306,6 +318,7 @@ fn daq_init_compiles_with_thousands_of_states() {
 
     let can_id = a2l_daq::layout::daq_can_id(&project, protocol).expect("DAQ CAN id");
     let config = TScriptConfig {
+        stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
         channels: vec![CanChannel {
@@ -315,6 +328,7 @@ fn daq_init_compiles_with_thousands_of_states() {
         }],
         pretrigger_ms: 0,
         signals: vec![SignalHook {
+            stop: None,
             message: MessageRef::Id {
                 can_id,
                 extended: can_id > 0x7FF,
