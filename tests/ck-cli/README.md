@@ -17,16 +17,15 @@ Everything is driven through the CanKing CLI (`ck`). On Windows its documentatio
 
 ### Prerequisites
 
-- The a2l-daq wasm transpiled into `canking-gui/src/a2l-daq-wasm/` (`npm run build:wasm` in `canking-gui`) and
-  `canking-gui/node_modules` installed (`npm install`). Without them `checks/10-config.sh` skips and every other check is blocked.
+- The a2l-daq wasm transpiled into `canking-gui/src/a2l-daq-wasm/` (`npm run build:wasm` in `canking-gui`) and `canking-gui/node_modules` installed (`npm install`).
+  Without them `checks/10-config.sh` skips and every other check is blocked.
 - Node.js (every check and assert runs through `node`).
 - A running CanKing service, reachable through the `ck` CLI (see above). Without it every per-case check is blocked.
 - An empty CanKing measurement setup; the checks that add nodes skip otherwise.
 - Two channels from the Kvaser Virtual CAN Driver for `checks/40-live.sh` and `checks/45-live-pid-remap.sh` (skipped otherwise).
-- Optionally, a physical Kvaser interface wired to an ECU for `checks/90-live-physical.sh` (skipped otherwise).
-- Optionally, a built service extension (`canking-service/dist/daq_decoder-*.ckext` or the raw
-  `target/wasm32-wasip2/release/daq_decoder.wasm`), which `run-all.sh` installs before the run. Without one, whatever
-  `daq_decoder` is already installed is tested.
+- Optionally, a physical Kvaser interface wired to an ECU, plus a `live-physical` case describing it, for `checks/90-live-physical.sh`.
+- Optionally, a built service extension (`canking-service/dist/daq_decoder-*.ckext` or the raw `target/wasm32-wasip2/release/daq_decoder.wasm`). 
+  Without one, whatever `daq_decoder` is already installed is tested.
 
 ### Layout
 
@@ -181,8 +180,32 @@ Uses the same virtual channel pair as `40-live`.
 
 ### `checks/90-live-physical.sh`: real ECU on the bench
 
-A sanity check against a real ECU connected through a physical Kvaser interface. It uses the case's config, so it
-is only meaningful when the case matches the connected ECU (the shipped cases describe sample A2Ls, not real hardware).
+A check against a real ECU connected through a physical Kvaser interface, only an example/placeholder.
+It runs only for a case named `live-physical` (`# only-for-cases: live-physical`), which is not shipped. Don't commit A2L of real hardware
+Write one for the connected ECU and keep it, and its A2L, outside the repo. `"a2l"` may be an absolute path:
+
+```json
+{
+  "name": "live-physical",
+  "a2l": "C:/path/outside/the/repo/my-ecu.a2l",
+  "protocol": "xcp",
+  "signals": ["SomeSignal"],
+  "assignments": { "SomeEvent": ["SomeSignal"] }
+}
+```
+
+```bash
+PHYS_CHANNEL=0 tests/ck-cli/run-all.sh tests/ck-cli/cases/*.case.json /path/to/live-physical.case.json
+```
+
+As a generated case it also goes through `make-fixture.mjs`, which bails on floats and on frames over 8 bytes, and that blocks
+the case's checks in `run-all.sh`. Make it a recorded case instead (a log captured off the ECU plus the config the GUI wrote,
+see [Two kinds of case](#two-kinds-of-case)), or run the two steps directly:
+
+```bash
+bash tests/ck-cli/checks/10-config.sh /path/to/live-physical.case.json
+PHYS_CHANNEL=0 bash tests/ck-cli/checks/90-live-physical.sh /path/to/live-physical.case.json
+```
 
 Opens the physical channel (`PHYS_CHANNEL`, or the only non-virtual channel if exactly one exists; skips otherwise) with
 the config's bit rate/CAN FD settings, attaches the extension with `start_daq: true` and runs for `SETTLE_S` (default `5`
@@ -193,6 +216,7 @@ here). It then asserts, from the service event log and the message log, that:
 3. CONNECT was sent on the command id (only a note if no node ACKed it),
 4. DAQ frames came back on the DTO id (skips if none did),
 5. the extension logged no unexpected warnings, and the received frames decode consistently with the config (`assert/decode-log.mjs`).
+   First PIDs the live decoder re-keyed from the ECU's replies are carried into the config the offline analysis uses.
 
 ---
 
@@ -210,6 +234,7 @@ Everything in `out/` is derived, so a check never has to know where a case came 
 | `<name>.startdaq.json` | `40-live` / `45-live-pid-remap` | the config with `start_daq` forced on |
 | `<name>.pid-remap-responder.asc` | `45-live-pid-remap` | the crafted GET_DAQ_SIZE response + synthetic re-keyed DAQ frame |
 | `<name>.pid-remap.expected.json` / `.pid-remap.frames.json` | `45-live-pid-remap` | what pass 2's synthetic frame must decode to, and what `ck analysis` actually decoded |
+| `<name>.physical.config.json` | `90-live-physical` | the config with any first PID the live decoder corrected from the ECU's replies |
 | `<name>.physical.frames.json` | `90-live-physical` | raw `ck analysis frames-between` output of the ECU log |
 
 ### Adding a case
@@ -269,6 +294,8 @@ result: ok=13 skipped=2 blocked=0 failed=0
 | `REPLAY_MS` | `1` | fixed replay rate for recorded logs |
 | `OUT_DIR` | `tests/ck-cli/out` | where derived artifacts go |
 | `PHYS_CHANNEL` | auto-detected if exactly one physical channel exists | CAN channel number wired to the ECU, for `90-live-physical` |
+| `PHYS_BITRATE` | the config's (A2L's) bit rate | bench bit rate for `90-live-physical`, when the ECU runs differently from its A2L |
+| `PHYS_DATA_BITRATE` | the config's CAN FD data rate | bench CAN FD data rate for `90-live-physical`; setting it opens the channel as CAN FD |
 
 ---
 

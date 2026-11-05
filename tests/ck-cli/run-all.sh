@@ -16,6 +16,7 @@
 #   REPLAY_MS         fixed replay rate for recorded logs        (default: 1)
 #   OUT_DIR           directory for generated artifacts          (default: tests/ck-cli/out)
 #   PHYS_CHANNEL      physical CAN channel wired to the ECU, for 90-live-physical (auto-detected if only one)
+#   PHYS_BITRATE      bench bit rate for 90-live-physical when it differs from the A2L (PHYS_DATA_BITRATE: CAN FD)
 
 set -u
 INVOKED_FROM="$PWD"
@@ -68,11 +69,9 @@ else
 fi
 
 # Every check in checks/ is discovered by glob and ordered by its numeric prefix
-# (keep prefixes two digits, spaced by 10, so lexical sort matches numeric order
-# and there's room to insert one later without renumbering).
+# (keep prefixes two digits, spaced by 10, so lexical sort matches numeric order and there's room to insert one later without renumbering).
 #
-# The lowest-numbered check builds the config + fixture every other check consumes, so it alone runs once up front for all cases
-# and everything after it runs once per case.
+# The lowest-numbered check builds the config + fixture every other check consumes, so it alone runs once up front for all cases and everything after it runs once per case.
 checks=(./checks/*.sh)
 setup_check="${checks[0]}"
 percase_checks=("${checks[@]:1}")
@@ -83,8 +82,7 @@ run "$(label_of "$setup_check"): A2L -> config JSON + fixture" "$setup_check" "$
 setup_status=$?
 
 if [ "$setup_status" -eq "$SKIP_EXIT" ]; then
-    # A blanket prerequisite gap (wasm not built, node_modules missing): setup
-    # bailed before touching a single case, so nothing below can run.
+    # A blanket prerequisite gap (wasm not built, node_modules missing): setup bailed before touching a single case, so nothing below can run.
     echo
     echo "setup skipped; every per-case check is blocked"
     for case_file in "${cases[@]}"; do
@@ -127,8 +125,7 @@ else
         for check in "${percase_checks[@]}"; do
             label="$(label_of "$check")"
 
-            # A check may restrict itself to specific cases with a header comment:
-            #   # only-for-cases: name-one name-two
+            # A check may restrict itself to specific cases with a header comment:   # only-for-cases: name-one name-two
             # No such comment means every case
             restriction=$(grep -m1 '^# only-for-cases:' "$check" || true)
             if [ -n "$restriction" ]; then

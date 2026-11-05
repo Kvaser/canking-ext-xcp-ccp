@@ -57,7 +57,8 @@ const tsSize = isXcp ? (proj.xcp_data?.daq_info?.timestamp_size ?? 0) : 0;
 // PID -> the signals that frame carries, in payload order:
 //   byte 0     PID = daq_list.first_pid + odt_index
 //   bytes 1..N timestamp, N = daq_info.timestamp_size   (first ODT only)
-//   remaining  ODT entries in order, each `size` bytes
+//   remaining ODT entries in order, each `size` bytes; a signal sits at its address offset inside its entry
+//             (an entry may start before it, padded to the ECU's granularity, or hold signals that overlap)
 
 const layoutByPid = new Map();
 
@@ -75,12 +76,12 @@ for (const dl of cfg.daq_lists) {
     }
 
     for (const entry of odt.entries) {
+      const entryStart = cursor;
       for (const name of entry.names) {
         const sig = sigByName.get(name);
         if (!sig) fail(`DAQ list references signal '${name}' absent from project.signals`);
-        if ((sig.virtual_inputs ?? []).length) {
-          fail(`signal '${name}' is a virtual measurement; it has no place in a DTO`);
-        }
+        const at = sig.ecu_address - entry.ecu_address;
+        if (at >= 0 && at + sig.size <= entry.size) cursor = entryStart + at;
         if (sig.bit_mask !== null && sig.bit_mask !== undefined) {
           const full = (1n << BigInt(8 * sig.size)) - 1n;
           if (BigInt(sig.bit_mask) !== full) {
@@ -107,6 +108,7 @@ for (const dl of cfg.daq_lists) {
         });
         cursor += sig.size;
       }
+      cursor = entryStart + entry.size;
     }
     layoutByPid.set(pid, slots);
   });

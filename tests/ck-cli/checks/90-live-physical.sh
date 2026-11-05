@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# TODO, add a case that references a real a2l file here
+# only-for-cases: live-physical
 #
-# Sanity check against a connected ECU on the bench.
+# Sanity check against a real ECU on the bench, and an example for writing your own.
+#
+# Runs only for a case named `live-physical`, which is not shipped.
+# Write one for the connected ECU, keep it (and its A2L) outside the repo its "a2l" may be an absolute path, and pass it to run-all.sh along with the shipped cases:
+#
+#   PHYS_CHANNEL=0 tests/ck-cli/run-all.sh tests/ck-cli/cases/*.case.json /path/to/live-physical.case.json
+#
+# Bus settings (bit rate, CAN FD data rate) come from the config, i.e. from the A2L. PHYS_BITRATE and PHYS_DATA_BITRATE override them when the bench runs differently.
 
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 FAILURES=0
-CASE_FILE="${1:-$CLI_DIR/cases/xcp-sample.case.json}"
+CASE_FILE="${1:?usage: live-physical.sh <case.json describing the connected ECU>}"
 NAME="$(basename "$CASE_FILE" .case.json)"
 EXT_NAME="${EXT_NAME:-daq_decoder}"
 SETTLE_S="${SETTLE_S:-5}"
@@ -39,6 +46,10 @@ process.stdout.write([xcp?"xcp":"ccp", fd?1:0, (xcp?x?.baudrate:k?.baudrate)||50
   ((xcp?x?.can_id_slave:k?.dto_id)||0).toString(16),
   xcp?"ff":"01"].join(" "));
 ' "$CONFIG")
+
+# An A2L's bus settings don't always match the bench; PHYS_BITRATE / PHYS_DATA_BITRATE (implies CAN FD) override them.
+BITRATE="${PHYS_BITRATE:-$BITRATE}"
+if [ -n "${PHYS_DATA_BITRATE:-}" ]; then NEEDS_FD=1; DBITRATE="$PHYS_DATA_BITRATE"; fi
 
 fdargs=()
 [ "$NEEDS_FD" = "1" ] && fdargs=(--bit-rate-fd "$DBITRATE")
@@ -139,7 +150,23 @@ if [ -z "$SESSION" ]; then
     exit 1
 fi
 
-STEP="ext:name=$EXT_NAME;config=$(cat "$CONFIG")"
+# The live decoder re-keys a list whose first PID the ECU reports differently (logged above), but the offline  analysis sends no commands and can't learn that.
+# Carry this run's logged corrections into the config it decodes with.
+ANALYSIS_CONFIG="$OUT_DIR/$NAME.physical.config.json"
+node -e '
+const fs = require("fs");
+const [cfgPath, logPath, node, out] = process.argv.slice(1);
+const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+const log = fs.readFileSync(logPath, "latin1");
+const run = log.slice(log.lastIndexOf(`Added new data processor '"'"'${node}'"'"'`));
+for (const m of run.matchAll(/DAQ list (\d+) starts at PID 0x([0-9A-Fa-f]+)/g)) {
+  const list = cfg.daq_lists.find((d) => d.id === Number(m[1]));
+  if (list) list.first_pid = parseInt(m[2], 16);
+}
+fs.writeFileSync(out, JSON.stringify(cfg));
+' "$CONFIG" "$EV" "$DP_NAME" "$ANALYSIS_CONFIG"
+
+STEP="ext:name=$EXT_NAME;config=$(cat "$ANALYSIS_CONFIG")"
 SET_OUT=$(ck_capture analysis set-processing "$SESSION" --step "$STEP" --json)
 if printf '%s' "$SET_OUT" | grep -q '"error"'; then
     fail "set-processing reported an error:"
@@ -153,7 +180,7 @@ ck_ analysis frames-between "$SESSION" --start-s 0 --end-s 3600 --max-count 1000
 if ! node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$FRAMES" 2>/dev/null; then
     fail "frames-between did not return JSON:"
     detail_block "$(head -5 "$FRAMES")"
-elif DECODE_OUT=$(node "$CLI_DIR/assert/decode-log.mjs" "$CONFIG" "$FRAMES" "$CASE_FILE" --no-pin --min-daq-frames 1); then
+elif DECODE_OUT=$(node "$CLI_DIR/assert/decode-log.mjs" "$ANALYSIS_CONFIG" "$FRAMES" "$CASE_FILE" --no-pin --min-daq-frames 1); then
     pass "DAQ frames from the ECU decoded consistently with the config's layout"
     detail_block "$DECODE_OUT"
 else
