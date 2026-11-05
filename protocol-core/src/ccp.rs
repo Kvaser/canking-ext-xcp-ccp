@@ -1,10 +1,7 @@
-//! Transport-agnostic CCP DAQ command generation (ASAM MCD-1 CCP 2.1).
+//! CCP 2.1 DAQ command generation.
 //!
-//! [`build_init_commands`] emits the DAQ initialisation sequence, [`build_stop_commands`] the shutdown sequence, using
-//! the same five [`Phase`](crate::protocol::Phase)s so the runtime and t-script drive both protocols identically.
-//!
-//! Every command is a **CRO** (Command Receive Object), 8 bytes on the CRO CAN identifier: `[cmd, ctr, data0..data5]`.
-//! Byte 1 is the **command counter** (`ctr`), incremented for each command and echoed back in the slave's CRM
+//! [`build_init_commands`] and [`build_stop_commands`] use the same five [`Phase`](crate::protocol::Phase)s as XCP.
+//! Every command is an 8-byte CRO on the CRO CAN id, `[cmd, ctr, data0..data5]`, where `ctr` counts up per command and the slave echoes it in its CRM.
 //!
 //! | Phase | Command | Bytes `[cmd, ctr, ...]` | Response |
 //! |-------|---------|-----------------------|----------|
@@ -21,18 +18,14 @@
 //! | `Stop` | `START_STOP_ALL 0x08` (stop) | `08 ctr 00` | ack |
 //! | `Stop` | `DISCONNECT 0x07` (end) | `07 ctr 01 00 sa_lo sa_hi` | ack |
 //!
-//! Byte-order rules (CCP 2.1 §3):
-//! - The **station address** (`CONNECT`/`DISCONNECT`) is always Intel/little-endian.
-//! - Multi-byte **address** (`WRITE_DAQ`), **DTO CAN id** (`GET_DAQ_SIZE`) and **prescaler** (`START_STOP`) follow the slave's byte order.
+//! Rules that shape the bytes:
 //!
-//! Two rules shape the sequence:
-//! - CCP 2.1 does not require the slave to post-increment its ODT-element pointer, so every element gets its own `SET_DAQ_PTR`
-//!   before its `WRITE_DAQ`. When the slave declares `BYTES_ONLY`, each multi-byte signal is registered as consecutive 1-byte `WRITE_DAQ`s
-//! - `GET_DAQ_SIZE` both clears the DAQ list and reports its size and first PID which the first PID is carried back in CRM byte 4.
-//! - `GET_SEED`/`UNLOCK` are marked optional not every slave implements them, and a development ECU with no real security algorithm typically accepts any key,
-//!   so `UNLOCK` is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built.
-//!
-//! Address extension is emitted as 0 for now
+//! - The station address (`CONNECT`/`DISCONNECT`) is always little-endian. The `WRITE_DAQ` address, the `GET_DAQ_SIZE` DTO id and the `START_STOP` prescaler follow the slave's byte order.
+//! - CCP doesn't require the slave to advance its element pointer, so every element gets its own `SET_DAQ_PTR`. With
+//!   `BYTES_ONLY`, a multi-byte signal is written as consecutive 1-byte elements.
+//! - `GET_DAQ_SIZE` clears the list and reports its first PID, which the runtime uses to correct the configured one.
+//! - `WRITE_DAQ`'s `ext` byte is the signal's `ECU_ADDRESS_EXTENSION`.
+//! - `GET_SEED`/`UNLOCK` are optional because not every slave implements them. `UNLOCK` sends an all-zero key.
 
 use crate::types::{A2lProject, ByteOrder, DaqList, EventEntry, ParsedSignal};
 use std::collections::HashMap;

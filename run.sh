@@ -7,7 +7,7 @@
 #   ./run.sh [group ...]
 #
 # Groups:
-#   lint     rustfmt and clippy (-D warnings) in every build configuration, eslint and prettier for canking-gui
+#   lint     rustfmt, clippy (-D warnings) in every build configuration, rustdoc, eslint and prettier for canking-gui
 #   rust     cargo tests (workspace defaults, protocol-core+serde, a2l-daq serde without tscript)
 #            + a2l-daq-cli release build
 #   wasm     wasm32-wasip2 component builds (a2l-daq, daq-decoder)
@@ -242,6 +242,7 @@ lint_group() {
     step "clippy (workspace, all targets)"         cargo clippy --workspace --all-targets -- -D warnings
     step "clippy a2l-daq (cli: serde, no default features)"         cargo clippy -p a2l-daq --all-targets --no-default-features --features serde -- -D warnings
     step "clippy a2l-daq (wasm component)"         cargo clippy -p a2l-daq --lib --target wasm32-wasip2 --no-default-features --features component -- -D warnings
+    step "rustdoc (broken links)" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
     step "eslint + prettier (canking-gui)" gui_lint
 }
 

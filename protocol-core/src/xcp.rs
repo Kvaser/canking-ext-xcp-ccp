@@ -1,31 +1,27 @@
-//! Transport-agnostic DAQ command generation.
+//! XCP DAQ command generation, independent of the transport.
 //!
-//! [`build_init_commands`] emits the DAQ initialisation sequence in five
-//! phases. Every command must be answered by a positive response, a `0xFE` first byte is an error packet and the sequence must stop.
-//! Commands whose response carries data the pipeline consumes are marked via [`XcpCommand::response`].
-//! [`build_stop_commands`] emits the shutdown sequence for a running DAQ session.
+//! [`build_init_commands`] emits the DAQ init sequence in five phases and [`build_stop_commands`] the shutdown.
+//! Every command expects a positive response (`0xFF`); an error packet (`0xFE`) aborts the sequence unless the command is optional.
+//! Commands whose response carries data the runtime uses are marked in [`XcpCommand::response`].
 //!
-//! | Phase | Commands | Expected response |
-//! |-------|----------|-------------------|
-//! | `Connect` | CONNECT, GET_STATUS, GET_SEED + UNLOCK (optional, resource=DAQ) | ack |
-//! | `Prepare` | START_STOP_SYNCH (stop all), then static: CLEAR_DAQ_LIST per list / dynamic: FREE_DAQ, ALLOC_DAQ, ALLOC_ODT xN, ALLOC_ODT_ENTRY xN, then SET_DAQ_ID per list with a user-assigned dynamic CAN id | ack |
-//! | `WriteEntries` | per ODT: SET_DAQ_PTR (entry 0), WRITE_DAQ x entries | ack |
-//! | `SetMode` | SET_DAQ_LIST_MODE per list | ack |
-//! | `Start` | START_STOP_DAQ_LIST (select) per list, START_STOP_SYNCH (start) | select: byte 1 = FIRST_PID |
-//! -------------------------------------------
-//! | 'Stop' | START_STOP_SYNCH (stop all), then static: CLEAR_DAQ_LIST per list / dynamic: FREE_DAQ, DISCONNECT | ack |
+//! | Phase | Commands |
+//! |-------|----------|
+//! | `Connect` | CONNECT, GET_STATUS, GET_SEED + UNLOCK (optional, resource DAQ) |
+//! | `Prepare` | START_STOP_SYNCH (stop all); static: CLEAR_DAQ_LIST per list; dynamic: FREE_DAQ, ALLOC_DAQ, ALLOC_ODT, ALLOC_ODT_ENTRY; then SET_DAQ_ID per list with a user-assigned CAN id |
+//! | `WriteEntries` | per ODT: SET_DAQ_PTR (entry 0), WRITE_DAQ per entry |
+//! | `SetMode` | SET_DAQ_LIST_MODE per list (event channel, prescaler, timestamp) |
+//! | `Start` | START_STOP_DAQ_LIST (select) per list, whose response carries the first PID; START_STOP_SYNCH (start) |
+//! | `Stop` | START_STOP_SYNCH (stop all); static: CLEAR_DAQ_LIST per list; dynamic: FREE_DAQ; DISCONNECT |
 //!
-//! Static and dynamic DAQ share every phase except `Prepare`. Two protocol rules shape the sequence:
+//! Rules that shape the bytes:
 //!
-//! - WRITE_DAQ auto-increments the slave's ODT-entry pointer, so one SET_DAQ_PTR per ODT (at entry 0) is enough.
-//!   Some reject SET_DAQ_PTR with a non-zero entry number.
-//! - ALLOC_DAQ numbers dynamic lists `0..count-1` regardless of the A2L `DAQ_LIST` identifiers, so in dynamic mode every command addresses lists
-//!   by their allocation index. Static lists keep their A2L identifier.
-//! - SET_DAQ_ID (transport-layer command `0xF2`, sub-command `0xFD`) is only sent for a list whose `CanIdSource::Dynamic` has a
-//!   user-assigned id; everything else (no override, a `FIXED` A2L id, or a `Dynamic` list left on its fallback) keeps transmitting
-//!   on the transport's shared default id, unchanged.
-//! - GET_SEED/UNLOCK are marked optional: many ecu:s don't implement them at all, and a development ECU with no real security algorithm typically accepts any key,
-//!   so UNLOCK is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built
+//! - Commands are only as long as their content, unless the A2L sets `MAX_DLC_REQUIRED`: then they are zero-padded to 8 bytes, or to `MAX_DLC` when it is set in the CAN FD block.
+//! - WRITE_DAQ auto-increments the slave's entry pointer, so one SET_DAQ_PTR per ODT is enough; some slaves reject a non-zero entry number anyway.
+//!   Its address-extension byte is the signal's `ECU_ADDRESS_EXTENSION`.
+//! - Dynamic lists are numbered `MIN_DAQ ..`, static lists keep their A2L identifier.
+//! - The prescaler is one byte, so a list's prescaler is clamped to 1..=255.
+//! - SET_DAQ_ID (`0xF2 0xFD`) is sent only for a `CanIdSource::Dynamic` list with a user-assigned id; every other list transmits on the transport's shared DAQ id.
+//! - GET_SEED/UNLOCK are optional because many ECUs don't implement them. UNLOCK sends an all-zero key, which a development ECU without a real algorithm usually accepts.
 
 use crate::types::{A2lProject, ByteOrder, DaqList, DaqListDef, EventEntry, ParsedSignal};
 use std::collections::HashMap;

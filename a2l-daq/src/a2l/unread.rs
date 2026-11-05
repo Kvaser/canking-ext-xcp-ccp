@@ -101,7 +101,7 @@ pub(crate) fn scan(tokens: &[String]) -> Vec<UnreadKeyword> {
         .collect()
 }
 
-/// The unread keywords in an A2L file's text, see [`scan`].
+/// The unread keywords in an A2L file's text.
 pub fn unread_keywords(content: &str) -> Vec<UnreadKeyword> {
     tokenize_checked(content)
         .map(|tokens| scan(&tokens))

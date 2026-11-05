@@ -1,3 +1,9 @@
+//! The DBC that decodes logged DAQ frames: one message per DAQ CAN id, multiplexed by the PID in byte 0.
+//!
+//! Signal positions come from [`crate::layout`].
+//!
+//! Scaling is the COMPU_METHOD's factor and offset, `TAB_VERB` tables become `VAL_` entries, floats get `SIG_VALTYPE_`, and extended ids carry bit 31.
+
 use crate::Protocol;
 use crate::a2l::{A2lProject, ByteOrder, CompuMethod, ParsedSignal};
 use crate::daq::DaqList;

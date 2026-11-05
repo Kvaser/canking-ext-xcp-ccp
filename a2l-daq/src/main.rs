@@ -1,3 +1,5 @@
+//! `a2l-daq-cli`: interactive A2L to DBC and t-script. Takes the A2L path as its only argument and asks for the rest.
+
 use a2l_daq::{
     A2lProject, CanChannel, DEFAULT_INIT_TIMEOUT_MS, DaqList, MessageRef, Protocol,
     ResolvedTrigger, SignalHook, TScriptConfig, TriggerAction, TriggerCondition, build_daq_init,

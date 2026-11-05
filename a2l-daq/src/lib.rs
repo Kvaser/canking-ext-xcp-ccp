@@ -1,3 +1,31 @@
+//! A2L in, DAQ setup out: parses the measurement metadata of an A2L file, packs the selected signals into DAQ
+//! lists, and renders a DBC, the data processor's JSON config and a Memorator t-script from them.
+//!
+//! The data model, the protocol commands and the frame layout live in `protocol-core`, shared with the data processor.
+//! This crate adds the parser ([`a2l`]), the packer ([`daq`]), and the generators ([`dbc`], `tscript`).
+//! [`pipeline`] chains them the way every host (CLI, wasm component, tests) does:
+//!
+//! ```
+//! let a2l = r#"
+//! /begin MEASUREMENT Rpm "Engine speed" UWORD NO_COMPU_METHOD 0 0 0 8000 ECU_ADDRESS 0x1000 /end MEASUREMENT
+//! /begin IF_DATA XCP
+//!   /begin XCP_ON_CAN 0x0105 CAN_ID_MASTER 0x0455 CAN_ID_SLAVE 0x0456 BAUDRATE 500000 /end XCP_ON_CAN
+//!   /begin DAQ DYNAMIC
+//!     /begin DAQ_LIST 0x0000 MAX_ODT 0x05 MAX_ODT_ENTRIES 0x07 /end DAQ_LIST
+//!     /begin EVENT "Task10ms" "10ms" 0x0000 DAQ 0x01 0x0A 0x06 0xFF /end EVENT
+//!   /end DAQ
+//! /end IF_DATA
+//! "#;
+//! let selected = ["Rpm".to_string()];
+//! let mut project = a2l_daq::parse_a2l(a2l, &selected).unwrap();
+//! let assignments = [("Task10ms".to_string(), selected.to_vec())];
+//! let out = a2l_daq::build(&mut project, &assignments, a2l_daq::Protocol::Xcp, "ecu.a2l").unwrap();
+//!
+//! assert_eq!(out.daq_lists.len(), 1);
+//! assert!(out.dbc.contains("BO_ 1110 DAQ"), "one DAQ message on CAN_ID_SLAVE 0x456");
+//! assert!(out.warnings.is_empty());
+//! ```
+
 pub mod a2l;
 pub mod daq;
 pub mod dbc;

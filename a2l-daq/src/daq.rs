@@ -1,3 +1,17 @@
+//! Packing selected signals into DAQ lists, ODTs and ODT entries.
+//!
+//! [`build_daq_list`] groups the signals by event, then hands out lists by protocol and DAQ mode:
+//!
+//! - XCP dynamic: from one shared pool, as many per event as the signals need.
+//! - XCP static: only the lists the A2L binds to the event (`EVENT_FIXED`), then unbound ones.
+//! - CCP: one list per raster, numbered and given its first PID by `SOURCE`/`QP_BLOB` when declared.
+//!
+//! Inside an event group every signal becomes one or more entries aligned to the ODT entry granularity and no larger than the max entry size.
+//! Entries that touch or overlap in memory merge, never across address extensions.
+//! First fit decreasing then fills ODTs up to the frame payload and the entry-count limit.
+//! Signals that fit nowhere come back as unplaced.
+//! First PIDs are estimates; the data processor corrects them  from the ECU's replies.
+
 use crate::a2l::{
     A2lProject, CanIdSource, CcpData, CcpSource, DaqListDef, EventEntry, ParsedSignal, Protocol,
 };
