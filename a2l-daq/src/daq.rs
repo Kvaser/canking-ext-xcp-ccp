@@ -1000,6 +1000,7 @@ mod tests {
                 can_fd: Some(CanFdInfo {
                     max_dlc: 24,
                     data_baudrate: Some(2_000_000),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),

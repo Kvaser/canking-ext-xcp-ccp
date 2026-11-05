@@ -403,6 +403,7 @@ mod tests {
             &project(Some(CanFdInfo {
                 max_dlc: 24,
                 data_baudrate: Some(2_000_000),
+                ..Default::default()
             })),
             &daq_lists_16_bytes(),
             Protocol::Xcp,

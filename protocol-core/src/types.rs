@@ -230,6 +230,8 @@ pub struct EventInfo {
 pub struct CanFdInfo {
     pub max_dlc: u16,
     pub data_baudrate: Option<u32>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub max_dlc_required: bool,
 }
 
 /// XCP-on-CAN transport layer configuration.
@@ -242,6 +244,8 @@ pub struct XcpInfo {
     pub can_id_slave: Option<u32>,
     pub baudrate: Option<u32>,
     pub can_fd: Option<CanFdInfo>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub max_dlc_required: bool,
 }
 
 /// XCP PROTOCOL_LAYER parameters.

@@ -98,7 +98,9 @@ impl Config {
                     can_fd: Some(CanFdInfo {
                         max_dlc: 64,
                         data_baudrate: Some(2_000_000),
+                        max_dlc_required: false,
                     }),
+                    max_dlc_required: false,
                 }),
                 protocol_layer: Some(ProtocolLayerInfo {
                     byte_order: Some(ByteOrder::MsbLast),

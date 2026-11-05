@@ -258,6 +258,7 @@ fn parse_xcp_on_can(tokens: &[String]) -> (Option<XcpInfo>, Vec<(u16, CanIdSourc
     let mut can_id_slave = None;
     let mut baudrate = None;
     let mut can_fd = None;
+    let mut max_dlc_required = false;
     let mut daq_list_can_ids: Vec<(u16, CanIdSource)> = Vec::new();
 
     let mut i = 1;
@@ -278,6 +279,10 @@ fn parse_xcp_on_can(tokens: &[String]) -> (Option<XcpInfo>, Vec<(u16, CanIdSourc
             "BAUDRATE" => {
                 baudrate = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
                 i += 2;
+            }
+            "MAX_DLC_REQUIRED" => {
+                max_dlc_required = true;
+                i += 1;
             }
             "/begin" => {
                 let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
@@ -307,6 +312,7 @@ fn parse_xcp_on_can(tokens: &[String]) -> (Option<XcpInfo>, Vec<(u16, CanIdSourc
             can_id_slave,
             baudrate,
             can_fd,
+            max_dlc_required,
         }),
         daq_list_can_ids,
     )
@@ -334,6 +340,7 @@ fn parse_daq_list_can_id(tokens: &[String]) -> Option<(u16, CanIdSource)> {
 fn parse_can_fd(tokens: &[String]) -> CanFdInfo {
     let mut max_dlc = 0u16;
     let mut data_baudrate = None;
+    let mut max_dlc_required = false;
 
     let mut i = 0;
     while i < tokens.len() {
@@ -349,6 +356,10 @@ fn parse_can_fd(tokens: &[String]) -> CanFdInfo {
                 data_baudrate = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
                 i += 2;
             }
+            "MAX_DLC_REQUIRED" => {
+                max_dlc_required = true;
+                i += 1;
+            }
             _ => {
                 i += 1;
             }
@@ -358,6 +369,7 @@ fn parse_can_fd(tokens: &[String]) -> CanFdInfo {
     CanFdInfo {
         max_dlc,
         data_baudrate,
+        max_dlc_required,
     }
 }
 
@@ -511,5 +523,32 @@ mod tests {
         )
         .unwrap();
         assert!(parse_if_data_xcp(&tokens).is_none());
+    }
+
+    #[test]
+    fn extended_id_flag_is_stripped_and_max_dlc_required_is_read() {
+        let tokens = tokenize_checked(
+            r#"
+            /begin IF_DATA XCP
+              /begin XCP_ON_CAN
+                0x0104 CAN_ID_MASTER 0x98FF0001 CAN_ID_SLAVE 0x98FF0002 MAX_DLC_REQUIRED
+                /begin DAQ_LIST_CAN_ID 0x0000 FIXED 0x98FF0003 /end DAQ_LIST_CAN_ID
+                /begin CAN_FD MAX_DLC 64 MAX_DLC_REQUIRED /end CAN_FD
+              /end XCP_ON_CAN
+              /begin DAQ DYNAMIC /begin DAQ_LIST 0x0000 /end DAQ_LIST /end DAQ
+            /end IF_DATA
+            "#,
+        )
+        .unwrap();
+        let xcp = parse_if_data_xcp(&tokens).unwrap();
+        let info = xcp.xcp_info.unwrap();
+        assert_eq!(info.can_id_master, Some(0x18FF0001));
+        assert_eq!(info.can_id_slave, Some(0x18FF0002));
+        assert_eq!(
+            xcp.daq_info.daq_lists[0].can_id,
+            CanIdSource::Fixed { id: 0x18FF0003 }
+        );
+        assert!(info.max_dlc_required);
+        assert!(info.can_fd.unwrap().max_dlc_required);
     }
 }

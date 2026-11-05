@@ -43,6 +43,7 @@ struct Ctx<'a> {
     timestamp_size: u16,
     events: &'a [EventEntry],
     daq_defs: &'a [DaqListDef],
+    frame_len: Option<usize>,
 }
 
 impl Ctx<'_> {
@@ -68,6 +69,7 @@ pub fn build_init_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<X
     phase_write_entries(&mut cmds, &ctx, daq_lists);
     phase_set_mode(&mut cmds, &ctx, daq_lists);
     phase_start(&mut cmds, &ctx, daq_lists);
+    pad(&mut cmds, ctx.frame_len);
     cmds
 }
 
@@ -99,7 +101,16 @@ pub fn build_stop_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<X
     }
 
     push(&mut cmds, XcpPhase::Stop, vec![0xFE], "DISCONNECT".into());
+    pad(&mut cmds, ctx.frame_len);
     cmds
+}
+
+/// Zero-pad every command to `len` bytes, for slaves that only accept full-length frames.
+fn pad(cmds: &mut [XcpCommand], len: Option<usize>) {
+    let Some(len) = len else { return };
+    for c in cmds.iter_mut().filter(|c| c.bytes.len() < len) {
+        c.bytes.resize(len, 0);
+    }
 }
 
 /// Snapshot the parsed project's XCP settings
@@ -114,6 +125,13 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
         timestamp_size: xcp.map(|x| x.daq_info.timestamp_size).unwrap_or(0),
         events: xcp.map(|x| x.event_info.events.as_slice()).unwrap_or(&[]),
         daq_defs: xcp.map(|x| x.daq_info.daq_lists.as_slice()).unwrap_or(&[]),
+        frame_len: xcp
+            .and_then(|x| x.xcp_info.as_ref())
+            .and_then(|t| match &t.can_fd {
+                Some(fd) if fd.max_dlc_required => Some(fd.max_dlc as usize),
+                _ if t.max_dlc_required => Some(8),
+                _ => None,
+            }),
     }
 }
 
@@ -758,5 +776,41 @@ mod tests {
                 "{can_id:?} must not emit SET_DAQ_ID"
             );
         }
+    }
+
+    #[test]
+    fn max_dlc_required_pads_every_frame_to_the_required_length() {
+        use crate::types::{CanFdInfo, XcpInfo};
+        let with = |classic: bool, fd: Option<CanFdInfo>| {
+            let mut p = project(DaqMode::Dynamic, vec![], 0);
+            p.xcp_data.as_mut().unwrap().xcp_info = Some(XcpInfo {
+                max_dlc_required: classic,
+                can_fd: fd,
+                ..Default::default()
+            });
+            let daq = one_daq_list(0);
+            let mut lens: Vec<usize> = build_init_commands(&p, &daq)
+                .into_iter()
+                .chain(build_stop_commands(&p, &daq))
+                .map(|c| c.bytes.len())
+                .collect();
+            lens.sort_unstable();
+            lens.dedup();
+            lens
+        };
+
+        assert!(with(false, None).contains(&1), "no padding unless required");
+        assert_eq!(with(true, None), vec![8]);
+        let fd = |required| CanFdInfo {
+            max_dlc: 64,
+            max_dlc_required: required,
+            ..Default::default()
+        };
+        assert_eq!(with(false, Some(fd(true))), vec![64]);
+        assert_eq!(
+            with(true, Some(fd(false))),
+            vec![8],
+            "classic flag only: pad to 8"
+        );
     }
 }

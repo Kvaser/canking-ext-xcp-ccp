@@ -118,6 +118,8 @@ impl Seq {
         bytes.push(cmd);
         bytes.push(self.ctr);
         bytes.extend_from_slice(data);
+        // A CRO is always 8 bytes
+        bytes.resize(bytes.len().max(8), 0);
         self.ctr = self.ctr.wrapping_add(1);
         self.cmds.push(CcpCommand {
             phase,
@@ -408,7 +410,15 @@ mod tests {
     fn connect_carries_station_address_little_endian() {
         let cmds = build_init_commands(&project(true), &one_daq_list());
         let connect = find(&cmds, CONNECT);
-        assert_eq!(connect.bytes, vec![CONNECT, 0x00, 0x00, 0x01], "0x0100 LE");
+        assert_eq!(
+            connect.bytes,
+            vec![CONNECT, 0x00, 0x00, 0x01, 0, 0, 0, 0],
+            "0x0100 LE"
+        );
+        assert!(
+            cmds.iter().all(|c| c.bytes.len() == 8),
+            "every CRO is 8 bytes"
+        );
     }
 
     #[test]
@@ -553,14 +563,17 @@ mod tests {
     fn start_is_start_stop_all_start_and_is_last() {
         let cmds = build_init_commands(&project(false), &one_daq_list());
         let last = cmds.last().unwrap();
-        assert_eq!(last.bytes, vec![START_STOP_ALL, last.bytes[1], MODE_START]);
+        assert_eq!(
+            &last.bytes[..3],
+            &[START_STOP_ALL, last.bytes[1], MODE_START]
+        );
         assert_eq!(last.phase, CcpPhase::Start);
     }
 
     #[test]
     fn stop_sequence_stops_all_then_disconnects() {
         let cmds = build_stop_commands(&project(false), &one_daq_list());
-        assert_eq!(cmds[0].bytes, vec![START_STOP_ALL, 0x00, MODE_STOP]);
+        assert_eq!(&cmds[0].bytes[..3], &[START_STOP_ALL, 0x00, MODE_STOP]);
         let disc = cmds.last().unwrap();
         assert_eq!(disc.bytes[0], DISCONNECT);
         assert_eq!(disc.bytes[2], 0x01, "end of session");
