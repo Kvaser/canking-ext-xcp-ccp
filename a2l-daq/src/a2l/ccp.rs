@@ -79,12 +79,19 @@ fn parse_ccp_contents(tokens: &[String]) -> CcpData {
     }
 }
 
-/// Parses a `/begin SEED_KEY "<dll name>" /end SEED_KEY` block.
+/// Parses `/begin SEED_KEY "<CAL dll>" "<DAQ dll>" "<PGM dll>" /end SEED_KEY`, keeping the DAQ privilege's DLL
 fn parse_seed_key(tokens: &[String]) -> Option<String> {
-    tokens
-        .first()
+    let names: Vec<&str> = tokens
+        .iter()
         .filter(|t| t.starts_with('"'))
-        .map(|t| t.trim_matches('"').to_string())
+        .map(|t| t.trim_matches('"'))
+        .collect();
+    let daq = if names.len() > 1 {
+        names[1]
+    } else {
+        *names.first()?
+    };
+    (!daq.is_empty()).then(|| daq.to_string())
 }
 
 /// Parses a `/begin RASTER` block into an [`EventEntry`].

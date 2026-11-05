@@ -425,6 +425,34 @@ mod tests {
         "#;
         let ccp = parse_a2l(content, &[]).unwrap().ccp_data.expect("ccp_data");
         assert_eq!(ccp.info.seed_key_dll, None, "no SEED_KEY block declared");
+
+        let per_privilege = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+        /begin SEED_KEY "cal.dll" "daq.dll" "pgm.dll" /end SEED_KEY
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(per_privilege, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
+        assert_eq!(
+            ccp.info.seed_key_dll.as_deref(),
+            Some("daq.dll"),
+            "CAL, DAQ, PGM: keep DAQ"
+        );
+
+        let no_daq_dll = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+        /begin SEED_KEY "cal.dll" "" "" /end SEED_KEY
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(no_daq_dll, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
+        assert_eq!(ccp.info.seed_key_dll, None, "DAQ needs no unlock");
     }
 
     #[test]
