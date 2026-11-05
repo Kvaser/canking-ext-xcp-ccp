@@ -1,48 +1,61 @@
-# DAQ Configurator (CanKing GUI extension)
+# canking-gui (DAQ Configurator)
 
-A CanKing workspace view for setting up XCP/CCP DAQ measurements from an A2L file:
+A CanKing workspace view, React and TypeScript: a five-step wizard from an A2L file to a configured
+[DAQ Decoder](../canking-service/README.md) node, plus DBC, config and t-script downloads. The steps, as a user sees
+them, are in the [user guide](user-guide.md), which ships in the `.ckext`.
 
-1. **Load A2L** - load an A2L, review the parsed signal/event counts, and choose the measurement protocol
-2. **Select signals** - pick MEASUREMENT signals from a searchable list.
-3. **Assign events** - map each selected signal to an event channel, or keep the event declared in the A2L.
-4. **Configure** - the generated t-script's settings: an optional manual CAN bus override, optional signal trigger conditions, and t-script options.
-5. **Apply & export** - set the data processor / `start_daq` option and push the generated configuration into the data
-   processor node via `addDataProcessor`/`updateDataProcessor`. Three artefacts can be downloaded: the DBC, the raw config JSON, and a
-   Memorator t-script (which uses the trigger conditions as its start-logger expression).
+## Behaviour
 
-## How it works
+The view holds no A2L or protocol logic. It runs [a2l-daq](../a2l-daq/README.md) in the browser: the wasm component,
+transpiled by `jco` into `src/a2l-daq-wasm/` (generated, not committed). The steps call it like this:
 
-All A2L parsing, DAQ list packing, and DBC/t-script generation happens in the browser through the [`a2l-daq`](../a2l-daq/README.md) Rust crate, compiled to
-a WASI P2 component and transpiled to JS with `jco` into `src/a2l-daq-wasm/` (generated with `npm run build:wasm`, or `npm run transpile:wasm` to only re-run the
-`jco` step on an already built `target/wasm32-wasip2/release/a2l_daq.wasm`).
+| Step | Calls |
+|---|---|
+| Load A2L | `inspect`: signals, events, protocols, bus settings, unread keywords |
+| Select signals, Assign events | `build`, for the live DAQ list preview |
+| Apply & export | `build-config` and `build-tscript`, with the CAN id overrides and prescalers from the DAQ list table |
 
-State handling:
+Apply then adds a DAQ Decoder node behind the chosen source with `addDataProcessor`, or updates the node it added
+before with `updateDataProcessor`.
 
-- **Project data**: signal/event selections, trigger conditions, t-script options, protocol, `startDaq`, DAQ list CAN id
-  overrides (`daqCanIdOverrides`), processor name and node id.
-- **Session data**: the A2L contents, wizard step, last warnings/DBC/config/t-script. 
+State is kept with the CanKing API's slices:
 
-## Development
+- **Project data**, saved with the CanKing project: `signalEvents` (selection and events), `startDaq`,
+  `triggerConditions`, `tscriptOptions`, `protocol`, `processorName`, `processorNodeId`, `daqCanIdOverrides`,
+  `daqPrescalers`. Options added in a later version are absent from older projects, so read them with a default.
+- **Session data**, gone when CanKing closes: `a2lFile`, `activeStep`, and the last `warnings`, `dbc`, `configJson`,
+  `tscript`.
 
-```sh
-npm install          # once
-npm run start        # vite dev server + CanKing in debug mode
-npm run startpreview # vite dev server + CanKing in production mode
-npm run build:wasm   # rebuild the a2l-daq wasm component + jco transpile
-npm run package      # npm pack (runs build via prepack) -> .tgz
+CanKing validates a data processor's config against the schema of its default config, which constrains the JSON; see
+[the contract](../protocol-core/README.md#config-json-contract).
+
+## Layout
+
+```
+|-src/
+  |-main.tsx, App.tsx      Entry point; App provides the CanKing context and the view's id
+  |-WorkspaceView/
+    |-index.tsx            The wizard: state, steps, Apply
+    |-SignalTable.tsx      Step 2, virtualised signal list with search, groups and sorting
+    |-EventAssignTable.tsx Step 3
+    |-BusSection.tsx, TriggerSection.tsx, TScriptSection.tsx   Step 4
+    |-DaqListSection.tsx   Step 5, CAN id and prescaler per DAQ list
+    |-util.ts              Option types and defaults, parsing and formatting helpers
+  |-a2l-daq-wasm/          jco output (generated)
+  |-cjk-fonts.css          Japanese and Simplified Chinese fallback fonts (WOFF2)
+|-user-guide.md            Shipped in the .ckext
 ```
 
-`build:wasm` requires the Rust toolchain with the `wasm32-wasip2` target (see the [root README](../README.md#building)).
-The compiled component is picked up from the workspace-level `target/` directory.
+## Develop
 
-The installable `.ckext` is not produced here; it is made from that `.tgz` by `./run.sh stage pack` from the repo root.
+```sh
+npm ci
+npm run build:wasm     # build the a2l-daq component and transpile it; needs the Rust wasm target
+npm run start          # vite dev server + CanKing in debug mode, loading this view live
+npm run lint           # eslint and Prettier (npm run format fixes the formatting)
+npm run package        # typecheck, vite build, npm pack -> daq-gui-<version>.tgz
+```
 
-`start`/`startpreview` launch CanKing (via the `canking` script) from `C:/Program Files/Kvaser CanKing/Kvaser CanKing.exe`,
-so they expect a Windows machine with CanKing installed at that path.
-
-The `@kvaser/canking-api` dependency is published on the public npm registry, but under Kvaser's EULA, not this
-repository's MIT license.
-
-## Info
-- CanKing validates the configuration against a schema inferred from the data processor's default config. 
-See the [root README](../README.md#the-config-json-contract) for the JSON contract rules this imposes.
+`start` and `startpreview` launch `C:/Program Files/Kvaser CanKing/Kvaser CanKing.exe`, so they need Windows with
+CanKing installed there. `npm run transpile:wasm` re-runs only the `jco` step on an existing build. The installable
+`.ckext` is made from the `.tgz` by `./run.sh stage pack` at the repository root.
