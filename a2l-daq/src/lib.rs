@@ -18,8 +18,8 @@ pub use protocol_core::xcp;
 // Re-exports
 pub use a2l::{
     A2lParseError, A2lSummary, GroupInfo, RejectedVirtual, RejectedVirtualReason, SignalSummary,
-    TransportInfo, decode_a2l_bytes, event_channels, inspect, list_events, list_protocols,
-    list_signal_names, parse_a2l, parse_a2l_with_rejects,
+    TransportInfo, UnreadKeyword, decode_a2l_bytes, event_channels, inspect, list_events,
+    list_protocols, list_signal_names, parse_a2l, parse_a2l_with_rejects, unread_keywords,
 };
 pub use daq::build_daq_list;
 pub use dbc::{DbcError, create_dbc_file, sanitize_name};

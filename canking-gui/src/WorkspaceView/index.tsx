@@ -575,6 +575,20 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                     </Box>
                   )}
 
+                  {summary?.ok && summary.ok.unread.length > 0 && (
+                    <Alert severity="warning">
+                      This A2L uses keywords the configurator does not read, so some outputs may be wrong:
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>
+                        {summary.ok.unread.map(u => (
+                          <li key={u.keyword}>
+                            <code>{u.keyword}</code>
+                            {u.count > 1 ? ` (${u.count}x)` : ''}: {u.effect}
+                          </li>
+                        ))}
+                      </ul>
+                    </Alert>
+                  )}
+
                   {summary?.ok && detectedProtocols.length > 0 && (
                     <TextField
                       size="small"

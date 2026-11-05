@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::group::parse_groups;
 use super::tokenizer::{scan_protocols, tokenize_checked};
+use super::unread::{self, UnreadKeyword};
 use super::{
     A2lParseError, EventEntry, Protocol, RejectedVirtualReason, event_channels, parse_tokens,
     selected_refs,
@@ -19,7 +20,6 @@ pub struct SignalSummary {
     pub size: u16,
     pub virtual_input: Option<String>,
     pub virtual_reject: Option<RejectedVirtualReason>,
-    /// Names of the MEASUREMENT GROUPs (if any) that directly reference this signal.
     pub groups: Vec<String>,
 }
 
@@ -49,6 +49,8 @@ pub struct A2lSummary {
     pub protocols: Vec<Protocol>,
     pub transports: Vec<TransportInfo>,
     pub groups: Vec<GroupInfo>,
+    /// Keywords in the file that change the outputs but aren't read, see [`UnreadKeyword`].
+    pub unread: Vec<UnreadKeyword>,
 }
 
 /// Returns signal metadata, event channels, and declared protocols in a single pass.
@@ -152,5 +154,6 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
         protocols,
         transports,
         groups,
+        unread: unread::scan(&tokens),
     })
 }

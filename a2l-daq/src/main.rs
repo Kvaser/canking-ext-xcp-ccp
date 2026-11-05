@@ -79,6 +79,10 @@ fn main() {
 
     println!("\nProtocol: {}", protocol.name());
 
+    for unread in a2l_daq::unread_keywords(&a2l_content) {
+        eprintln!("Warning: {unread}");
+    }
+
     // Selected signals that did not survive parsing, or cannot be measured.
     for warning in a2l_daq::dropped_signals(&project, &selected_signals, &rejected) {
         eprintln!("Warning: {}", warning);

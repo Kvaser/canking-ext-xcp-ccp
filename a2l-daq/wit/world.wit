@@ -143,6 +143,16 @@ interface generator {
     data-bitrate: option<u32>,
   }
 
+  /// A keyword in the A2L that changes the outputs but isn't read
+  record unread-keyword {
+    /// As it appears in the A2L, e.g. `/include`.
+    keyword: string,
+    /// How many times it occurs.
+    count: u32,
+    /// What goes wrong because it isn't read.
+    effect: string,
+  }
+
   /// Everything the selection UI needs from an A2L
   record a2l-summary {
     signals: list<signal-summary>,
@@ -150,6 +160,7 @@ interface generator {
     protocols: list<protocol>,
     transports: list<transport-info>,
     groups: list<group-info>,
+    unread: list<unread-keyword>,
   }
 
   /// Output

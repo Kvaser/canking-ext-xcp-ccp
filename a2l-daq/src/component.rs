@@ -24,6 +24,15 @@ impl bindings::Guest for Component {
                 .map(transport_to_wit)
                 .collect(),
             groups: summary.groups.into_iter().map(group_to_wit).collect(),
+            unread: summary
+                .unread
+                .into_iter()
+                .map(|u| bindings::UnreadKeyword {
+                    keyword: u.keyword,
+                    count: u.count,
+                    effect: u.effect,
+                })
+                .collect(),
         })
     }
 

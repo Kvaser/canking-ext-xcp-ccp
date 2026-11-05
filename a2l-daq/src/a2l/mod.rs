@@ -12,6 +12,8 @@
 //!
 //! `summary` is a UI-facing view over a parse result.
 //!
+//! `unread` flags keywords that change the outputs but aren't parsed yet.
+//!
 //! `encoding` decodes raw file bytes.
 
 use std::collections::HashSet;
@@ -28,6 +30,7 @@ mod group;
 mod measurement;
 mod summary;
 mod tokenizer;
+mod unread;
 mod virtual_signal;
 mod xcp;
 
@@ -41,6 +44,7 @@ pub use protocol_core::types::{
 
 pub use encoding::decode_a2l_bytes;
 pub use summary::{A2lSummary, GroupInfo, SignalSummary, TransportInfo, inspect};
+pub use unread::{UnreadKeyword, unread_keywords};
 pub use virtual_signal::{RejectedVirtual, RejectedVirtualReason};
 
 use tokenizer::{scan_events, scan_protocols, scan_signal_names, tokenize_checked};
