@@ -106,6 +106,8 @@ pub struct CompuMethod {
     pub default_text: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub formula: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unsupported: Option<String>,
 }
 
 /// How DAQ lists are configured in the slave, declared by the first keyword
@@ -374,6 +376,7 @@ mod compu_methods_serde {
                         text_table: e.text_table,
                         default_text: e.default_text,
                         formula: None,
+                        unsupported: None,
                     },
                 )
             })

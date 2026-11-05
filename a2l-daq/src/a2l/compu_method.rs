@@ -1,5 +1,6 @@
 //! Parsing `/begin COMPU_METHOD` blocks (and the `COMPU_VTAB`/`COMPU_VTAB_RANGE` they can reference) into [`CompuMethod`]s.
 
+use super::formula::linear_from_formula_var;
 use super::tokenizer::{extract_block, parse_f64_token};
 use super::{CompuMethod, VTabEntry};
 use std::collections::HashMap;
@@ -153,6 +154,7 @@ fn parse_compu_method_block(tokens: &[String]) -> (CompuMethod, Option<String>) 
     let mut offset = 0.0f64;
     let mut tab_ref = None;
     let mut formula = None;
+    let mut unsupported = None;
 
     match conv_type {
         "LINEAR" => {
@@ -203,13 +205,18 @@ fn parse_compu_method_block(tokens: &[String]) -> (CompuMethod, Option<String>) 
                         // Linear case: raw = (b*phys + c) / f, inverted: physical = (f*raw - c) / b
                         factor = f / b;
                         offset = -c / b;
+                    } else {
+                        unsupported = Some("non-linear RAT_FUNC".to_string());
                     }
                     break;
                 }
                 pos += 1;
             }
         }
-        "TAB_VERB" | "TAB_INTP" | "TAB_NOINTP" => {
+        "TAB_INTP" | "TAB_NOINTP" => {
+            unsupported = Some(format!("{conv_type} numeric table"));
+        }
+        "TAB_VERB" => {
             while pos < tokens.len() {
                 if tokens[pos] == "COMPU_TAB_REF" {
                     tab_ref = tokens.get(pos + 1).cloned();
@@ -229,6 +236,16 @@ fn parse_compu_method_block(tokens: &[String]) -> (CompuMethod, Option<String>) 
                 }
                 pos += 1;
             }
+            // X1 is the raw value for an ordinary measurement but virtual ones have their FORM separately.
+            match formula.as_deref().and_then(linear_from_formula_var) {
+                Some((None | Some(1), f, o)) => (factor, offset) = (f, o),
+                _ => {
+                    unsupported = Some(format!(
+                        "FORM '{}' is not linear in X1",
+                        formula.as_deref().unwrap_or("")
+                    ))
+                }
+            }
         }
         _ => {} // IDENTICAL
     }
@@ -241,6 +258,7 @@ fn parse_compu_method_block(tokens: &[String]) -> (CompuMethod, Option<String>) 
             text_table: Vec::new(),
             default_text: None,
             formula,
+            unsupported,
         },
         tab_ref,
     )

@@ -499,6 +499,7 @@ mod tests {
                 ],
                 default_text: None,
                 formula: None,
+                unsupported: None,
             },
         );
         let daq = vec![DaqList {

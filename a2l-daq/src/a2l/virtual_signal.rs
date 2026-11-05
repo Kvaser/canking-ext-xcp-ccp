@@ -141,10 +141,11 @@ pub(super) fn resolve_virtual_signals(project: &mut A2lProject) -> Vec<RejectedV
             continue;
         };
 
-        let (f_in, o_in) = input
+        let input_cm = input
             .conversion
             .as_ref()
-            .and_then(|c| project.compu_methods.get(&c.identifier))
+            .and_then(|c| project.compu_methods.get(&c.identifier));
+        let (f_in, o_in) = input_cm
             .map(|cm| (cm.factor, cm.offset))
             .unwrap_or((1.0, 0.0));
 
@@ -169,6 +170,7 @@ pub(super) fn resolve_virtual_signals(project: &mut A2lProject) -> Vec<RejectedV
                 text_table: Vec::new(),
                 default_text: None,
                 formula: Some(formula),
+                unsupported: input_cm.and_then(|cm| cm.unsupported.clone()),
             },
         ));
 

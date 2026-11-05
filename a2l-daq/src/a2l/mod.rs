@@ -805,6 +805,48 @@ mod tests {
     }
 
     #[test]
+    fn linear_form_is_folded_and_the_rest_is_flagged_unsupported() {
+        let content = r#"
+      /begin COMPU_METHOD Lin "" FORM "%5.1" "degC" /begin FORMULA "X1*0.5 - 40" /end FORMULA /end COMPU_METHOD
+      /begin COMPU_METHOD BareX "" FORM "%5.1" "V" /begin FORMULA "(X+2)/4" /end FORMULA /end COMPU_METHOD
+      /begin COMPU_METHOD Square "" FORM "%5.1" "W" /begin FORMULA "X1*X1" /end FORMULA /end COMPU_METHOD
+      /begin COMPU_METHOD Rat "" RAT_FUNC "%5.1" "" COEFFS 1 0 0 0 0 1 /end COMPU_METHOD
+      /begin COMPU_METHOD Tab "" TAB_INTP "%5.1" "" COMPU_TAB_REF Tab_T /end COMPU_METHOD
+        "#;
+        let measurements: String = ["Lin", "BareX", "Square", "Rat", "Tab"]
+            .iter()
+            .enumerate()
+            .map(|(i, cm)| {
+                format!("/begin MEASUREMENT M{i} \"\" UWORD {cm} 0 0 0 100 ECU_ADDRESS 0x{i}0 /end MEASUREMENT
+")
+            })
+            .collect();
+        let project = parse_a2l(&(measurements + content), &[]).unwrap();
+        let cm = |name: &str| &project.compu_methods[name];
+
+        assert_eq!((cm("Lin").factor, cm("Lin").offset), (0.5, -40.0));
+        assert_eq!(
+            (cm("BareX").factor, cm("BareX").offset),
+            (0.25, 0.5),
+            "bare X is X1"
+        );
+        assert_eq!(cm("Lin").unsupported, None);
+        assert_eq!(cm("BareX").unsupported, None);
+        assert_eq!(
+            cm("Square").unsupported.as_deref(),
+            Some("FORM 'X1*X1' is not linear in X1")
+        );
+        assert_eq!(
+            cm("Rat").unsupported.as_deref(),
+            Some("non-linear RAT_FUNC")
+        );
+        assert_eq!(
+            cm("Tab").unsupported.as_deref(),
+            Some("TAB_INTP numeric table")
+        );
+    }
+
+    #[test]
     fn parses_static_daq_mode_and_event_fixed() {
         let content = r#"
       /begin IF_DATA XCP

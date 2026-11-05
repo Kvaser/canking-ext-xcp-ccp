@@ -355,5 +355,14 @@ fn diag_to_wit(d: crate::Diagnostic) -> bindings::Diagnostic {
         crate::Diagnostic::CollidingNames { sanitized, names } => {
             bindings::Diagnostic::CollidingNames(bindings::CollidingNames { sanitized, names })
         }
+        crate::Diagnostic::UnsupportedConversion {
+            name,
+            conversion,
+            reason,
+        } => bindings::Diagnostic::UnsupportedConversion(bindings::UnsupportedConversion {
+            name,
+            conversion,
+            reason,
+        }),
     }
 }

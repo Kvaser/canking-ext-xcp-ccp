@@ -51,6 +51,7 @@ impl Config {
                 text_table: vec![],
                 default_text: Some("".to_string()),
                 formula: None,
+                unsupported: None,
             },
         );
 

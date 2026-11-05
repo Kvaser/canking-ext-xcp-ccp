@@ -53,6 +53,11 @@ function diagnosticText(d: Diagnostic): string {
         `Signals ${d.val.names.map((n) => `'${n}'`).join(", ")} all become ` +
         `'${d.val.sanitized}' in the DBC and t-script, so they cannot be told apart`
       );
+    case "unsupported-conversion":
+      return (
+        `Signal '${d.val.name}' uses conversion '${d.val.conversion}' (${d.val.reason}), ` +
+        `which is not supported: its values are raw instead of physical`
+      );
   }
 }
 

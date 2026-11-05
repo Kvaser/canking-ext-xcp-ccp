@@ -62,6 +62,14 @@ interface generator {
     names: list<string>,
   }
 
+  record unsupported-conversion {
+    name: string,
+    /// The COMPU_METHOD identifier.
+    conversion: string,
+    /// Which part of the conversion is unsupported, e.g. `non-linear RAT_FUNC`.
+    reason: string,
+  }
+
   /// A non-fatal issue. The caller decides how to surface it.
   variant diagnostic {
     /// A signal was assigned to an event but no DAQ list slot remained.
@@ -74,6 +82,8 @@ interface generator {
     unmeasurable-signal(unmeasurable-signal),
     /// Two or more signals sanitise to one DBC identifier, so the generated DBC and t-script cannot tell them apart.
     colliding-names(colliding-names),
+    /// A placed signal's conversion cannot be applied, so it is logged and decoded as its raw value.
+    unsupported-conversion(unsupported-conversion),
   }
 
   // ---- Inputs / outputs ----
