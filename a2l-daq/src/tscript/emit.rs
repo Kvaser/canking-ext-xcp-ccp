@@ -569,7 +569,7 @@ fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
 }
 
 /// The `on Timer logTimer` hook: stop the logger once the post-trigger timer expires, and DAQ after the last capture.
-/// 
+///
 /// Only emitted when `config.timer_ms` is `Some`.
 fn log_timer_block(config: &TScriptConfig) -> String {
     let mut out = String::new();

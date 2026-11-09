@@ -1,8 +1,9 @@
 # a2l-daq
 
 Turns an A2L file into a DAQ setup: parses its measurements, transport and events, packs the selected signals into DAQ
-lists, and renders a DBC, the data processor's config JSON and a Memorator t-script. One codebase, three builds: the
-interactive `a2l-daq-cli`, the wasm component the [DAQ Configurator](../canking-gui/README.md) runs, and a plain library.
+lists, and renders a DBC, the data processor's config JSON and a Memorator t-script. 
+
+Builds three things: the interactive `a2l-daq-cli`, the wasm component the [DAQ Configurator](../canking-gui/README.md) runs, and a plain library.
 The data model, the protocol commands and the frame layout come from [protocol-core](../protocol-core/README.md).
 
 ## Pipeline

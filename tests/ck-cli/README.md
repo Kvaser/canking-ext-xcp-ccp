@@ -1,7 +1,7 @@
 # tests/ck-cli
 
-End-to-end tests of both extensions inside a running CanKing, driven through the CanKing CLI (`ck`). They build a
-config with the same wasm the GUI runs, apply it, decode logs offline and live, and optionally talk to a real ECU.
+End-to-end tests of both extensions inside a running CanKing, driven through the CanKing CLI (`ck`). 
+They build a config with the same wasm the GUI runs, apply it, decode logs offline and live, and optionally talk to a real ECU.
 `ck` is documented with CanKing, by default at `C:\Program Files\Kvaser CanKing\docs\user-guide\html\ck\overview.html`.
 
 ```bash
@@ -12,14 +12,14 @@ bash tests/ck-cli/run-all.sh tests/ck-cli/cases/ccp-sample.case.json  # one case
 
 ## Prerequisites
 
-- The a2l-daq wasm transpiled into `canking-gui/src/a2l-daq-wasm/` (`npm run build:wasm`) and `canking-gui/node_modules`
-  installed. Without them `10-config` skips and every other check is blocked.
+- The a2l-daq wasm transpiled into `canking-gui/src/a2l-daq-wasm/` (`npm run build:wasm`) and `canking-gui/node_modules`installed. 
+  Without them `10-config` skips and every other check is blocked.
 - Node.js. Every check and assert runs through it.
 - A running CanKing service reachable by `ck`, with an empty measurement setup. `lib.sh` finds `ck` at `$CK`, else the
   first of `C:/Program Files/Kvaser CanKing/service/ck.exe`, `/opt/canking/service/ck`, and `ck` on `PATH`.
 - Two Kvaser Virtual CAN Driver channels, for `40-live` and `45-live-pid-remap`.
 - Optional: a built decoder, `canking-service/dist/daq_decoder-*.ckext` or `target/wasm32-wasip2/release/daq_decoder.wasm`,
-  installed before the run. Without one, the installed `daq_decoder` is tested.
+  installed before the run, otherwise an already installed version will be used.
 - Optional: a Kvaser interface wired to an ECU and a private `live-physical` case, for `90-live-physical`.
 
 ## Cases
@@ -38,23 +38,19 @@ A case (`cases/*.case.json`) stands in for the GUI's selection steps:
 }
 ```
 
-`"a2l"` may be an absolute path. Optional `daqCanIdOverrides` and `daqPrescalers` take `[DAQ list id, value]` pairs, as
-the GUI's DAQ list table sends them.
+`"a2l"` may be an absolute path. Optional `daqCanIdOverrides` and `daqPrescalers` take `[DAQ list id, value]` pairs, as the GUI's DAQ list table sends them.
 
-- **Generated** (both shipped cases): `util/make-fixture.mjs` invents DTO frames from the config. Cheap and
-  deterministic, but it derives the frame layout with the decoder's own rules, so both agree even if those rules are
-  wrong. It refuses floats, partial bit masks and payloads over 8 bytes.
-- **Recorded**: adds a `recorded` block naming a log captured from a real ECU and the config the GUI wrote with it, under
-  `logs/` (none ship). `10-config` rebuilds the config from the A2L and asserts it equals the recorded one, which pins
-  the A2L-to-config chain to a real GUI output. `recorded.expect` holds human-checked values, and `minDaqFrames` stops a
-  log that decoded nothing from passing.
+- **Generated** (both shipped cases): `util/make-fixture.mjs` invents DTO frames from the config.
+  Cheap and deterministic, but it derives the frame layout with the decoder's own rules. It refuses floats, partial bit masks and payloads over 8 bytes.
+- **Recorded**: adds a `recorded` block naming a log captured from a real ECU and the config the GUI wrote with it, under `logs/`. 
+  `10-config` rebuilds the config from the A2L and asserts it equals the recorded one, which pins the A2L-to-config chain to a real GUI output.
+  `recorded.expect` holds human-checked values, and `minDaqFrames` stops a log that decoded nothing from passing.
 
 Real ECUs and their A2Ls stay out of the repository.
 
 ## Checks
 
-`run-all.sh` runs every `checks/*.sh` in order for each case. A check limited to some cases says so in a
-`# only-for-cases:` header.
+`run-all.sh` runs every `checks/*.sh` in order for each case. A check limited to some cases says so in a `# only-for-cases:` header.
 
 | Check | Does | Passes with |
 |---|---|---|

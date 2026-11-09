@@ -1,13 +1,12 @@
 # canking-gui (DAQ Configurator)
 
-A CanKing workspace view, React and TypeScript: a five-step wizard from an A2L file to a configured
-[DAQ Decoder](../canking-service/README.md) node, plus DBC, config and t-script downloads. The steps, as a user sees
-them, are in the [user guide](user-guide.md), which ships in the `.ckext`.
+A CanKing workspace view, React and TypeScript: a five-step wizard from an A2L file to a configured[DAQ Decoder](../canking-service/README.md) node, plus DBC, config and t-script downloads.
 
 ## Behaviour
 
-The view holds no A2L or protocol logic. It runs [a2l-daq](../a2l-daq/README.md) in the browser: the wasm component,
-transpiled by `jco` into `src/a2l-daq-wasm/` (generated, not committed). The steps call it like this:
+The view holds no A2L or protocol logic. It runs [a2l-daq](../a2l-daq/README.md) in the browser: the wasm component, transpiled by `jco` into `src/a2l-daq-wasm/`. 
+
+The steps call it like this:
 
 | Step | Calls |
 |---|---|
@@ -15,19 +14,16 @@ transpiled by `jco` into `src/a2l-daq-wasm/` (generated, not committed). The ste
 | Select signals, Assign events | `build`, for the live DAQ list preview |
 | Apply & export | `build-config` and `build-tscript`, with the CAN id overrides and prescalers from the DAQ list table |
 
-Apply then adds a DAQ Decoder node behind the chosen source with `addDataProcessor`, or updates the node it added
-before with `updateDataProcessor`.
+Apply then adds a DAQ Decoder node behind the chosen source with `addDataProcessor`, or updates the node it added before with `updateDataProcessor`.
 
 State is kept with the CanKing API's slices:
 
 - **Project data**, saved with the CanKing project: `signalEvents` (selection and events), `startDaq`,
-  `triggerConditions`, `tscriptOptions`, `protocol`, `processorName`, `processorNodeId`, `daqCanIdOverrides`,
-  `daqPrescalers`. Options added in a later version are absent from older projects, so read them with a default.
-- **Session data**, gone when CanKing closes: `a2lFile`, `activeStep`, and the last `warnings`, `dbc`, `configJson`,
-  `tscript`.
+  `triggerConditions`, `tscriptOptions`, `protocol`, `processorName`, `processorNodeId`, `daqCanIdOverrides`, `daqPrescalers`. 
+  Options added in a later version are absent from older projects, so read them with a default.
+- **Session data**, gone when CanKing closes: `a2lFile`, `activeStep`, and the last `warnings`, `dbc`, `configJson`, `tscript`.
 
-CanKing validates a data processor's config against the schema of its default config, which constrains the JSON; see
-[the contract](../protocol-core/README.md#config-json-contract).
+CanKing validates a data processor's config against the schema of its default config, which constrains the JSON; see [the contract](../protocol-core/README.md#config-json-contract).
 
 ## Layout
 
@@ -42,7 +38,6 @@ CanKing validates a data processor's config against the schema of its default co
     |-DaqListSection.tsx   Step 5, CAN id and prescaler per DAQ list
     |-util.ts              Option types and defaults, parsing and formatting helpers
   |-a2l-daq-wasm/          jco output (generated)
-  |-cjk-fonts.css          Japanese and Simplified Chinese fallback fonts (WOFF2)
 |-user-guide.md            Shipped in the .ckext
 ```
 

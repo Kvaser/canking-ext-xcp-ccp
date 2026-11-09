@@ -1,14 +1,12 @@
 # canking-service (DAQ Decoder)
 
 A CanKing data processor, Rust compiled to a wasm component. It turns the DAQ Configurator's config into a runtime
-decoder, optionally sends the DAQ init sequence at measurement start, and decodes DAQ frames into signals. Parsing A2Ls
-and packing lists happen in the [DAQ Configurator](../canking-gui/README.md); the config format is
-[protocol-core's](../protocol-core/README.md#config-json-contract). The [user guide](user-guide.md) ships in the `.ckext`.
+decoder, optionally sends the DAQ init sequence at measurement start, and decodes DAQ frames into signals.
+Parsing A2Ls and packing lists happen in the [DAQ Configurator](../canking-gui/README.md); the config format is[protocol-core's](../protocol-core/README.md#config-json-contract).
 
 ## Behaviour
 
-It implements the `data-processor` world of [canking-data-processor@1.2.0.wit](wit/canking-data-processor@1.2.0.wit),
-the version that needs CanKing 7.6:
+It implements the `data-processor` world of [canking-data-processor@1.2.0.wit](wit/canking-data-processor@1.2.0.wit), the version that needs CanKing 7.6:
 
 | Call | Does |
 |---|---|
@@ -23,12 +21,9 @@ the version that needs CanKing 7.6:
 - **PID calibration.** The config's first PIDs are estimates. GET_DAQ_SIZE (CCP) and START_STOP_DAQ_LIST select (XCP)
   answer with a list's real first PID; the decoder then re-keys the list, logs the correction and re-declares the frame.
   A correction lasts until the config changes.
-- **Responses are matched by order**, so a lost one would shift the rest. Calibration therefore only runs with
-  `start_daq`, a reported PID range that reaches the reserved identifiers (`0xFC` and up for XCP, `0xFF` for CCP) is
-  rejected, lists left sharing PIDs are reported, and a sequence that ends with unanswered commands is logged at stop
-  with a warning that the run's calibration may be misattributed.
-- **Every decoded frame carries the latest value of every signal**, not only those in its own ODT
-  (`replay_cached_signals` in [lib.rs](src/lib.rs)).
+- **Responses are matched by order** Calibration therefore only runs with `start_daq`, a reported PID range that reaches the reserved identifiers (`0xFC` and up for XCP, `0xFF` for CCP) is
+  rejected, lists left sharing PIDs are reported, and a sequence that ends with unanswered commands is logged at stop with a warning that the run's calibration may be misattributed.
+- **Every decoded frame carries the latest value of every signal**, not only those in its own ODT (`replay_cached_signals` in [lib.rs](src/lib.rs)).
 
 ## Layout
 
