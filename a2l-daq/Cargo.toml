@@ -23,7 +23,6 @@ component = ["dep:wit-bindgen", "serde", "dep:serde_json", "tscript"]
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "a2l-daq-cli"

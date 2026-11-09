@@ -1,6 +1,6 @@
 //! WASI Preview 2 component bindings.
 //!
-//! Build: `cargo build --lib --target wasm32-wasip2 --no-default-features --features component`
+//! Build: `cargo rustc -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib`
 
 wit_bindgen::generate!({
     world: "a2l-daq",

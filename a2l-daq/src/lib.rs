@@ -62,8 +62,8 @@ pub use xcp::{XcpCommand, XcpPhase, XcpResponse, build_init_commands};
 #[cfg(feature = "serde")]
 pub use protocol_core::config::{self, Config};
 
-// Wasm only
-#[cfg(all(feature = "component", target_arch = "wasm32"))]
+// The wasm component.
+#[cfg(feature = "component")]
 mod component;
 
 // T-script generation

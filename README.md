@@ -43,13 +43,13 @@ Prerequisites:
 
 | Group | Steps |
 |---|---|
-| `lint` | rustfmt, clippy with `-D warnings` in every build configuration, rustdoc, eslint and Prettier |
-| `rust` | cargo tests in each feature combination, the CLI release build |
+| `lint` | rustfmt, clippy with `-D warnings` for the workspace and the a2l-daq component, rustdoc, eslint and Prettier |
+| `rust` | cargo tests for the workspace and for a2l-daq without `tscript`, the CLI release build |
 | `wasm` | the a2l-daq component and the DAQ Decoder, for `wasm32-wasip2` |
-| `gui` | npm ci, jco transpile, typecheck and vite build, npm pack |
+| `gui` | npm ci (skipped locally while `node_modules` matches `package-lock.json`), jco transpile, typecheck and vite build, npm pack |
 | `stage` | license files and `ck-ext-info.json` next to each build in `canking-gui/dist` and `canking-service/dist`, ready to sign |
 | `pack` | `canking-gui/dist/daq-gui-<version>.ckext` and `canking-service/dist/daq_decoder-<version>.ckext` |
-| `ck-cli` | the end-to-end tests |
+| `ck-cli` | the end-to-end CanKing tests |
 | `all` (default) | every group except `ck-cli` |
 
 ```sh

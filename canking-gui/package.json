@@ -26,7 +26,7 @@
     "lint": "eslint . --max-warnings 0 && prettier --check src",
     "format": "prettier --write src",
     "transpile:wasm": "jco transpile ../target/wasm32-wasip2/release/a2l_daq.wasm -o src/a2l-daq-wasm --base64-cutoff 10000000",
-    "build:wasm": "cargo build --manifest-path ../a2l-daq/Cargo.toml --lib --release --target wasm32-wasip2 --no-default-features --features component && npm run transpile:wasm",
+    "build:wasm": "cargo rustc --manifest-path ../a2l-daq/Cargo.toml --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib && npm run transpile:wasm",
     "prepack": "npm run build",
     "prebuild": "rimraf dist"
   },

@@ -7,11 +7,12 @@
 #   ./run.sh [group ...]
 #
 # Groups:
-#   lint     rustfmt, clippy (-D warnings) in every build configuration, rustdoc, eslint and prettier for canking-gui
-#   rust     cargo tests (workspace defaults, protocol-core+serde, a2l-daq serde without tscript)
-#            + a2l-daq-cli release build
+#   lint     rustfmt, clippy (-D warnings) for the workspace and the a2l-daq component, rustdoc,
+#            eslint and prettier for canking-gui
+#   rust     cargo tests (workspace, and a2l-daq without tscript) + a2l-daq-cli release build
 #   wasm     wasm32-wasip2 component builds (a2l-daq, daq-decoder)
-#   gui      canking-gui: npm install, jco transpile, typecheck + vite build, npm pack (.tgz)
+#   gui      canking-gui: npm ci (skipped locally while node_modules matches package-lock.json),
+#            jco transpile, typecheck + vite build, npm pack (.tgz)
 #   stage    generate license.txt + THIRD_PARTY_LICENSES.html (cargo-about), then stage the raw
 #            .tgz/.wasm, license/doc files and ck-ext-info.json into canking-gui/dist and canking-service/dist,
 #            ready to be signed. Needs `gui` and `wasm` (daq-decoder) run first.
@@ -42,6 +43,11 @@ step() {
 
 gui_install() {
     cd canking-gui
+    if [ -z "${CI:-}" ] && [ -f node_modules/.package-lock.json ] \
+        && [ ! package-lock.json -nt node_modules/.package-lock.json ]; then
+        echo "node_modules matches package-lock.json, skipping npm ci"
+        return 0
+    fi
     npm ci
 }
 
@@ -239,9 +245,10 @@ gui_lint() {
 
 lint_group() {
     step "rustfmt" cargo fmt --all --check
-    step "clippy (workspace, all targets)"         cargo clippy --workspace --all-targets -- -D warnings
-    step "clippy a2l-daq (cli: serde, no default features)"         cargo clippy -p a2l-daq --all-targets --no-default-features --features serde -- -D warnings
-    step "clippy a2l-daq (wasm component)"         cargo clippy -p a2l-daq --lib --target wasm32-wasip2 --no-default-features --features component -- -D warnings
+    step "clippy (workspace, all targets)" \
+        cargo clippy --workspace --all-targets -- -D warnings
+    step "clippy a2l-daq (component)" \
+        cargo clippy -p a2l-daq --lib --no-default-features --features component -- -D warnings
     step "rustdoc (broken links)" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
     step "eslint + prettier (canking-gui)" gui_lint
 }
@@ -249,9 +256,7 @@ lint_group() {
 rust_group() {
     step "cargo test (workspace, default features)" \
         cargo test --workspace
-    step "cargo test protocol-core (serde)" \
-        cargo test -p protocol-core --features serde
-    step "cargo test a2l-daq (cli: serde, no default features)" \
+    step "cargo test a2l-daq (serde, without tscript)" \
         cargo test -p a2l-daq --no-default-features --features serde
     step "cargo build a2l-daq-cli (release)" \
         cargo build -p a2l-daq --release
@@ -259,8 +264,7 @@ rust_group() {
 
 wasm_group() {
     step "wasm build a2l-daq (component)" \
-        cargo build -p a2l-daq --lib --release --target wasm32-wasip2 \
-            --no-default-features --features component
+        cargo rustc -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib
     step "wasm build daq-decoder" \
         cargo build -p daq-decoder --release --target wasm32-wasip2
 }

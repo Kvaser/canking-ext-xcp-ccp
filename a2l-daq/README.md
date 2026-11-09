@@ -138,7 +138,7 @@ From the workspace root:
 
 ```sh
 cargo run -p a2l-daq --release -- path/to/ecu.a2l     # the CLI; prompts for everything else
-cargo build -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component
+cargo rustc -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib   # the wasm component
 cargo test -p a2l-daq                                    # default features, the CLI
 cargo test -p a2l-daq --no-default-features --features serde
 ```
