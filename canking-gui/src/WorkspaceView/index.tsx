@@ -16,6 +16,7 @@ import {
   Stepper,
   TextField,
   Typography,
+  alpha,
 } from '@mui/material';
 
 import { generator } from '../a2l-daq-wasm/a2l_daq.js';
@@ -35,6 +36,8 @@ import TScriptSection from './TScriptSection';
 import DaqListSection from './DaqListSection';
 import {
   DEFAULT_TSCRIPT_OPTIONS,
+  FORM_MAX_WIDTH,
+  panelSx,
   errorText,
   formatBitrate,
   parseCanId,
@@ -166,6 +169,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     activeStepLoaded;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   // Parse the A2L (in wasm) whenever its content changes.
   const summary = useMemo<{ ok: A2lSummary; error?: never } | { ok?: never; error: string } | null>(() => {
@@ -363,6 +367,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
         }
       }
       setWarnings(warningLines);
+      exportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
       const existing =
         measurementSetup?.dataProcessors.find(
@@ -465,16 +470,47 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
 
   const stepDisabled = (index: number) => (index >= 1 && !hasSummary) || (index >= 2 && !hasSignals);
   const canGoNext = activeStep === 0 ? hasSummary : hasSignals;
+  const isLastStep = activeStep === STEPS.length - 1;
+  const blockedReason = !hasSummary
+    ? 'Load an A2L file to continue'
+    : !hasSignals && activeStep > 0
+      ? 'Select at least one signal to continue'
+      : isLastStep && processorName.trim() === ''
+        ? 'Enter the service extension name'
+        : undefined;
+  const compactSteps = width < 760;
 
-  const stepNavigation = (
-    <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-      <Button disabled={activeStep === 0} onClick={() => goToStep(activeStep - 1)}>
+  const footer = (
+    <Box
+      sx={theme => ({
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 2,
+        mt: 1,
+        pt: 1.5,
+        borderTop: `1px solid ${alpha(theme.palette.text.primary, 0.12)}`,
+        // Sizes as in the OBD2 extension's toolbar buttons
+        '& .MuiButton-root': { minWidth: 112, height: 34, whiteSpace: 'nowrap' },
+      })}
+    >
+      {/* Together on the left, under the content, so they stay in view on a wide pane */}
+      <Button variant="outlined" disabled={activeStep === 0} onClick={() => goToStep(activeStep - 1)}>
         Back
       </Button>
-      {activeStep < STEPS.length - 1 && (
+      {isLastStep ? (
+        <Button variant="contained" disabled={!canApply} onClick={() => void onApply()}>
+          Apply to data processor
+        </Button>
+      ) : (
         <Button variant="contained" disabled={!canGoNext} onClick={() => goToStep(activeStep + 1)}>
           Next
         </Button>
+      )}
+      {blockedReason !== undefined && (
+        <Typography variant="caption" color="text.secondary">
+          {blockedReason}
+        </Typography>
       )}
     </Box>
   );
@@ -497,11 +533,15 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
           }
         }}
       >
-        <Stepper nonLinear activeStep={activeStep} sx={{ mb: 2 }}>
+        <Stepper
+          nonLinear
+          activeStep={activeStep}
+          sx={{ mb: 2, flexShrink: 0, '& .MuiStepLabel-label': { whiteSpace: 'nowrap' } }}
+        >
           {STEPS.map((label, index) => (
-            <Step key={label} completed={false}>
-              <StepButton onClick={() => goToStep(index)} disabled={stepDisabled(index)}>
-                {label}
+            <Step key={label} completed={index < activeStep}>
+              <StepButton onClick={() => goToStep(index)} disabled={stepDisabled(index)} aria-label={label}>
+                {compactSteps && index !== activeStep ? '' : label}
               </StepButton>
             </Step>
           ))}
@@ -530,7 +570,11 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                   }}
                 >
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Button variant="contained" onClick={() => fileInputRef.current?.click()}>
+                    <Button
+                      variant={a2lFile.name === '' ? 'contained' : 'outlined'}
+                      onClick={() => fileInputRef.current?.click()}
+                      sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                    >
                       Load A2L…
                     </Button>
                     <input
@@ -559,22 +603,20 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
 
                   {summary?.ok && (
                     <Box
-                      sx={{
+                      sx={theme => ({
+                        ...panelSx(theme),
                         p: 2,
-                        border: 1,
-                        borderColor: 'divider',
-                        borderRadius: 1,
                         display: 'grid',
                         gridTemplateColumns: 'auto 1fr',
                         columnGap: 3,
                         rowGap: 1,
                         alignItems: 'center',
-                      }}
+                      })}
                     >
                       <Typography variant="body2" color="text.secondary">
                         File
                       </Typography>
-                      <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+                      <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
                         {a2lFile.name}
                       </Typography>
 
@@ -645,7 +687,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                       label="Protocol"
                       value={activeProtocol}
                       onChange={e => setProtocol(e.target.value as Protocol)}
-                      sx={{ width: 220 }}
+                      sx={{ width: 240 }}
                       helperText={
                         detectedProtocols.length > 1
                           ? 'Multiple protocols detected. Choose one'
@@ -667,7 +709,6 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                   )}
                 </Box>
               </SectionControl>
-              {stepNavigation}
             </>
           )}
 
@@ -680,7 +721,6 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                 signalEvents={activeSignalEvents}
                 onSignalEventsChange={setSignalEvents}
               />
-              {stepNavigation}
             </>
           )}
 
@@ -692,14 +732,13 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                 signalEvents={activeSignalEvents}
                 onSignalEventsChange={setSignalEvents}
               />
-              {stepNavigation}
             </>
           )}
 
           {/* Step 4 Configure the generated t-script */}
           {activeStep === 3 && (
-            <>
-              <SectionControl text="T-script · CAN bus">
+            <Box sx={{ maxWidth: FORM_MAX_WIDTH }}>
+              <SectionControl text="CAN bus">
                 <BusSection
                   bus={tscriptOptions.bus}
                   onBusChange={bus => setTscriptOptions({ ...tscriptOptions, bus })}
@@ -707,7 +746,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                 />
               </SectionControl>
 
-              <SectionControl text="T-script · Trigger">
+              <SectionControl text="Start trigger">
                 <TriggerSection
                   signalNames={selectedSignals}
                   conditions={conditions}
@@ -716,12 +755,12 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                 />
               </SectionControl>
 
-              <SectionControl text="T-script · Stop">
+              <SectionControl text="Stop">
                 <TriggerSection
                   signalNames={selectedSignals}
                   conditions={stopConditions}
                   onConditionsChange={setStopConditions}
-                  description="Stops logging and DAQ for good when all conditions hold, or when the stop frame arrives."
+                  description="Stops logging and DAQ for good when all conditions hold, or when a frame with the stop CAN id arrives"
                 />
                 <TextField
                   size="small"
@@ -732,9 +771,9 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                     (tscriptOptions.stopCanId ?? '').trim() !== '' &&
                     parseCanId(tscriptOptions.stopCanId ?? '') === null
                   }
-                  helperText="Any frame with this id, e.g. a button or tester message. Hex with 0x, or decimal."
+                  helperText="Hex with 0x, or decimal"
                   onChange={e => setTscriptOptions({ ...tscriptOptions, stopCanId: e.target.value })}
-                  sx={{ width: 360, mt: 2, mb: 1 }}
+                  sx={{ width: 240, mt: 2, mb: 1 }}
                 />
                 <Typography variant="caption" color="text.secondary" component="p">
                   DAQ also stops after the last capture and when the script is stopped. If the logger loses power or is
@@ -742,35 +781,27 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                 </Typography>
               </SectionControl>
 
-              <SectionControl text="T-script · Logging options">
+              <SectionControl text="Logging">
                 <TScriptSection options={tscriptOptions} onOptionsChange={setTscriptOptions} />
               </SectionControl>
-              {stepNavigation}
-            </>
+            </Box>
           )}
 
           {/* Step 5 Apply to the data processor and export artefacts */}
           {activeStep === 4 && (
-            <>
+            <Box sx={{ maxWidth: FORM_MAX_WIDTH }}>
               <SectionControl text="Data processor">
-                <Box
-                  sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 2,
-                    my: 1,
-                  }}
-                >
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, my: 1 }}>
                   <TextField
                     size="small"
                     label="Service extension name"
                     helperText={
                       //TODO select among predefined extensions
-                      'The registered extension name, see ck-ext-info.json of the installed extension'
+                      "The name in the installed extension's ck-ext-info.json"
                     }
                     value={processorName}
                     onChange={e => setProcessorName(e.target.value)}
-                    sx={{ width: 460 }}
+                    sx={{ width: 460, maxWidth: '100%' }}
                   />
                   {processorNodeId === '' && (
                     <TextField
@@ -779,7 +810,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                       label="Connect after source"
                       value={sourceId}
                       onChange={e => setSourceId(e.target.value)}
-                      sx={{ width: 460 }}
+                      sx={{ width: 460, maxWidth: '100%' }}
                       helperText="Where to insert the new data processor node"
                     >
                       <MenuItem value="">
@@ -792,39 +823,45 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                       ))}
                     </TextField>
                   )}
-                  <FormControlLabel
-                    control={<Checkbox checked={startDaq} onChange={e => setStartDaq(e.target.checked)} />}
-                    label="Start DAQ on the ECU at measurement start"
-                  />
-                  <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-                    When enabled, the extension sends the {activeProtocol.toUpperCase()} init/start-DAQ command sequence
-                    to the ECU when a measurement starts.
-                  </Typography>
-                  {daqListPreview.length > 0 && (
-                    <Box>
-                      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                        DAQ lists
+                  <Box>
+                    <FormControlLabel
+                      control={<Checkbox checked={startDaq} onChange={e => setStartDaq(e.target.checked)} />}
+                      label="Start DAQ on the ECU at measurement start"
+                    />
+                    <Typography variant="caption" color="text.secondary" component="p">
+                      The data processor then sends the {activeProtocol.toUpperCase()} init sequence to the ECU when a
+                      measurement starts.
+                    </Typography>
+                  </Box>
+                </Box>
+              </SectionControl>
+
+              {daqListPreview.length > 0 && (
+                <SectionControl text="DAQ lists">
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, my: 1 }}>
+                    <DaqListSection
+                      daqLists={daqListPreview}
+                      overrides={canIdOverrides}
+                      onOverridesChange={setCanIdOverrides}
+                      prescalerMax={prescalerMax}
+                      prescalers={prescalers}
+                      onPrescalersChange={setPrescalers}
+                    />
+                    {activeProtocol === 'xcp' && (
+                      <Typography variant="caption" color="text.secondary">
+                        Assigned ids (SET_DAQ_ID) and prescalers are sent with the init sequence, so they only take
+                        effect with &quot;Start DAQ on the ECU&quot;.
                       </Typography>
-                      <DaqListSection
-                        daqLists={daqListPreview}
-                        overrides={canIdOverrides}
-                        onOverridesChange={setCanIdOverrides}
-                        prescalerMax={prescalerMax}
-                        prescalers={prescalers}
-                        onPrescalersChange={setPrescalers}
-                      />
-                      {activeProtocol === 'xcp' && (
-                        <Typography variant="caption" color="text.secondary">
-                          Assigned ids (SET_DAQ_ID) and prescalers are sent as part of the init sequence, and only take
-                          effect once &quot;Start DAQ on the ECU&quot; is enabled.
-                        </Typography>
-                      )}
-                    </Box>
-                  )}
-                  <Box sx={{ display: 'flex', gap: 2 }}>
-                    <Button variant="contained" disabled={!canApply} onClick={() => void onApply()}>
-                      Apply to data processor
-                    </Button>
+                    )}
+                  </Box>
+                </SectionControl>
+              )}
+
+              <SectionControl text="Export">
+                <Box ref={exportRef} sx={{ display: 'flex', flexDirection: 'column', gap: 1, my: 1 }}>
+                  <Box
+                    sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', '& .MuiButton-root': { whiteSpace: 'nowrap' } }}
+                  >
                     <Button
                       variant="outlined"
                       disabled={dbc === ''}
@@ -847,6 +884,11 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                       Download t-script
                     </Button>
                   </Box>
+                  {dbc === '' && (
+                    <Typography variant="caption" color="text.secondary">
+                      Apply to the data processor first; that also generates the files.
+                    </Typography>
+                  )}
                   {warnings.length > 0 && (
                     <Alert severity="warning">
                       {warnings.map((w, i) => (
@@ -856,10 +898,10 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                   )}
                 </Box>
               </SectionControl>
-              {stepNavigation}
-            </>
+            </Box>
           )}
         </Box>
+        {footer}
       </Box>
     </SizedBox>
   );

@@ -1,4 +1,14 @@
+import { alpha, Theme } from '@mui/material';
 import { CanMode, EventInfo, TransportInfo } from '../a2l-daq-wasm/interfaces/kvaser-a2l-daq-generator.js';
+
+export const panelSx = (theme: Theme) => ({
+  border: `1px solid ${alpha(theme.palette.text.primary, 0.12)}`,
+  background: alpha(theme.palette.text.primary, 0.03),
+  borderRadius: 1.5,
+});
+
+/** Form steps stop growing and captions stay readable on wide panes. */
+export const FORM_MAX_WIDTH = 900;
 
 /**
  * A single trigger condition, e.g. `Rpm > 2500`.

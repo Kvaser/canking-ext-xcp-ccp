@@ -14,7 +14,7 @@ import {
   Typography,
 } from '@mui/material';
 import { EventInfo } from '../a2l-daq-wasm/interfaces/kvaser-a2l-daq-generator.js';
-import { formatEvent, SignalEventMap } from './util';
+import { formatEvent, panelSx, SignalEventMap } from './util';
 
 const MAX_ROWS = 400;
 
@@ -77,21 +77,24 @@ function EventAssignTable({ events, signalEvents, onSignalEventsChange }: EventA
         flexDirection: 'column',
       }}
     >
+      {/* Controls stretch to one height */}
       <Box
-        sx={{
+        sx={theme => ({
+          ...panelSx(theme),
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'stretch',
           gap: 2,
+          p: 1,
           mb: 1,
           flexWrap: 'wrap',
-        }}
+        })}
       >
         <TextField
           size="small"
           label="Search selected signals"
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          sx={{ width: 240 }}
+          sx={{ width: 300 }}
         />
         <Select size="small" value={bulkEvent} onChange={e => setBulkEvent(e.target.value)} sx={{ width: 260 }}>
           <MenuItem value={A2L_DEFAULT}>
@@ -99,8 +102,8 @@ function EventAssignTable({ events, signalEvents, onSignalEventsChange }: EventA
           </MenuItem>
           {eventOptions}
         </Select>
-        <Button size="small" variant="outlined" onClick={bulkAssign}>
-          Assign to all {filter.trim() !== '' ? 'matching' : ''} ({filtered.length})
+        <Button variant="outlined" onClick={bulkAssign} sx={{ whiteSpace: 'nowrap' }}>
+          Assign to all{filter.trim() !== '' ? ' matching' : ''} ({filtered.length})
         </Button>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>

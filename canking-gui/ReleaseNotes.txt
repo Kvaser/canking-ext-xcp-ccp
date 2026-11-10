@@ -20,6 +20,8 @@ Requires Kvaser CanKing 7.6 or later.
 - Fixed 29-bit CAN ids flagged with bit 31 in the A2L
 - Fixed extended CAN ids in the generated DBC
 
+- Minor improvements to the layout and style of the graphical interface
+
 
 New Features and Fixed Problems in version 1.0.0
 -------------------------------------------------------------------------------

@@ -25,6 +25,22 @@ export interface DaqListSectionProps {
   onPrescalersChange: (value: Record<string, string>) => void;
 }
 
+/** Which lists take a CAN id from the user (XCP SET_DAQ_ID), in words that fit any count. */
+function canIdText(dynamic: number, total: number): string {
+  if (dynamic === 0) {
+    return total === 1
+      ? 'The DAQ list uses the shared default CAN id or one fixed by the A2L.'
+      : `Each of the ${total} DAQ lists uses the shared default CAN id or one fixed by the A2L.`;
+  }
+  const which =
+    dynamic === total
+      ? total === 1
+        ? 'The DAQ list takes'
+        : 'All DAQ lists take'
+      : `${dynamic} of ${total} DAQ lists take`;
+  return `${which} a CAN id of your choice (XCP SET_DAQ_ID); left blank, a list keeps the shared default id.`;
+}
+
 /**
  * Step 5: each packed DAQ list with its CAN identifier and prescaler.
  *
@@ -56,11 +72,7 @@ function DaqListSection({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Typography variant="body2" color="text.secondary">
-        {dynamicCount > 0
-          ? `${dynamicCount} of ${daqLists.length} DAQ list(s) accept a runtime-assigned CAN id ` +
-            `(XCP SET_DAQ_ID). Leave one blank to keep it on the shared default id.`
-          : `None of these ${daqLists.length} DAQ list(s) accept a runtime-assigned CAN id; ` +
-            `each uses either the shared default id or one fixed by the A2L.`}
+        {canIdText(dynamicCount, daqLists.length)}
         {prescalerMax !== undefined && ' A prescaler n sends a list on every n-th cycle of its event.'}
       </Typography>
       <TableContainer sx={{ border: 1, borderColor: 'divider', maxWidth: 860 }}>

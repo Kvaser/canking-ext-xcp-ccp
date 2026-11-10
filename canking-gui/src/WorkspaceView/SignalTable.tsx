@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { GroupInfo, SignalSummary } from '../a2l-daq-wasm/interfaces/kvaser-a2l-daq-generator.js';
-import { SignalEventMap } from './util';
+import { panelSx, SignalEventMap } from './util';
 
 const ROW_HEIGHT = 40;
 const ALL_GROUPS = '';
@@ -300,7 +300,17 @@ function SignalTable({ signals, groups, signalEvents, onSignalEventsChange }: Si
         flexDirection: 'column',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+      <Box
+        sx={theme => ({
+          ...panelSx(theme),
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          p: 1,
+          mb: 1,
+          flexWrap: 'wrap',
+        })}
+      >
         <TextField
           size="small"
           label="Search name, description or unit"
