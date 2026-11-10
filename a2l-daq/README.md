@@ -78,7 +78,8 @@ A Memorator program (slot 0) that brings the ECU up and logs on a trigger, witho
 
 3. Starts the logger when the condition holds. With a timer it stops the logger after that long, keeps DAQ running,
    and captures again the next time the condition turns from false to true, up to an optional number of captures.
-4. With a watchdog time, runs the init again when no DAQ frame arrives for that long, e.g. after the ECU restarts.
+4. With a watchdog time, checks once per that period that DAQ frames still arrive and, if none did (e.g. after the ECU
+   restarts), runs the init again 5 s later: one to two periods plus 5 s after the last frame.
 5. `endDaq()` stops logging and DAQ for good: after the last capture, when the stop condition holds, when the stop
    frame (any frame with a chosen CAN id) arrives, and in `on stop`. A logger that loses power can't send it, and the
    ECU then keeps sending DAQ until it restarts.

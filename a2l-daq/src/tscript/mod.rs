@@ -47,7 +47,8 @@ pub struct TScriptConfig {
     pub timer_ms: Option<u32>,
     /// With `timer_ms`: stop DAQ after this many captures. `None` keeps capturing.
     pub max_captures: Option<u32>,
-    /// Start the DAQ init over when no DAQ frame arrives for this many ms. `None` disables the watchdog.
+    /// Check once per this many ms that DAQ frames still arrive, and start the DAQ init over if none did.
+    /// `None` disables the watchdog.
     pub daq_watchdog_ms: Option<u32>,
     /// Stop logging and DAQ for good when a frame with this CAN id arrives.
     pub stop_can_id: Option<u32>,

@@ -116,9 +116,13 @@ fn behaviour_lines(config: &TScriptConfig) -> String {
             "If the ECU stops answering the DAQ init, the init starts over after {DAQ_INIT_RESTART_MS} ms."
         );
         if let Some(ms) = config.daq_watchdog_ms {
+            // The watchdog checks once per period, so it fires one to two periods after the last frame.
+            let (ms64, pause) = (u64::from(ms), u64::from(DAQ_INIT_RESTART_MS));
+            let (lo, hi) = (ms64 + pause, 2 * ms64 + pause);
             let _ = writeln!(
                 out,
-                "If no DAQ frame arrives for {ms} ms, e.g. after the ECU restarts, the DAQ init starts over."
+                "Every {ms} ms the script checks that DAQ frames still arrive. If none did, e.g. after the ECU restarts,\n\
+                 the DAQ init starts over {DAQ_INIT_RESTART_MS} ms later: {lo}-{hi} ms after the last DAQ frame."
             );
         }
     }
@@ -1333,6 +1337,10 @@ mod tests {
         let t = generate_tscript(&timed_config(None, Some(2000)));
         assert!(t.contains("    Timer daqWatchdog;"), "got:\n{t}");
         assert!(t.contains("    daqWatchdog.timeout = 2000;"), "got:\n{t}");
+        assert!(
+            t.contains("starts over 5000 ms later: 7000-9000 ms after the last DAQ frame."),
+            "got:\n{t}"
+        );
         assert!(
             t.contains(" {\n    daq_seen = 1;\n"),
             "every hook feeds it, got:\n{t}"

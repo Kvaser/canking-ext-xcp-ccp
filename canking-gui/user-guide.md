@@ -40,7 +40,7 @@ Options for the downloadable t-script:
 - **Logging**: CAN channel, pretrigger time, and **Stop logging after** a time.
 - **Captures** (with a stop time, default 1): after each capture the script waits until the trigger condition has been false, and starts the next capture when it turns true again.
   DAQ keeps running in between. After the last capture the script stops DAQ on the ECU. Leave it blank for no limit.
-- **Restart DAQ after silence**: if no DAQ frame arrives for this long, for example because the ECU restarted, the script sets up DAQ again.
+- **Restart DAQ after silence**: the script checks once per this period that DAQ frames still arrive. If none did, for example because the ECU restarted, it sets up DAQ again 5 s later: one to two periods plus 5 s after the last frame.
   Leave it blank to never do that. A DAQ setup the ECU doesn't answer always starts over after 5 seconds.
 - **Standalone t-script**: the script decodes the signals itself, so it compiles without the DBC.
 

@@ -94,8 +94,9 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
         sx={{ width: 240, mt: 1 }}
       />
       <Typography variant="caption" color="text.secondary">
-        If no DAQ frame arrives for this long, e.g. after the ECU restarts, the script runs the DAQ init again. A failed
-        init always starts over after 5 s.
+        The script checks once per this period that DAQ frames still arrive. If none did, e.g. after the ECU restarts,
+        it runs the DAQ init again 5 s later: one to two periods plus 5 s after the last frame. A failed init always
+        starts over after 5 s.
       </Typography>
       <FormControlLabel
         control={
