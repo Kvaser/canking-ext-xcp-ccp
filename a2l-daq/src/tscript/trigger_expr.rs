@@ -274,8 +274,7 @@ fn index_into<'a>(names: &[&'a str], digits: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::a2l::{CanIdSource, CompuMethod, Conversion, ParsedSignal};
-    use crate::daq::{Odt, OdtEntry};
+    use crate::tscript::test_util::two_odt_project;
 
     const TEST_CAN_ID: u32 = 0x456;
 
@@ -405,67 +404,9 @@ mod tests {
         );
     }
 
-    fn scaled_project() -> (A2lProject, Vec<DaqList>) {
-        let mut temp = ParsedSignal {
-            name: "Temp".into(),
-            size: 2,
-            ecu_address: 0x20,
-            is_signed: true,
-            ..Default::default()
-        };
-        temp.conversion = Some(Conversion {
-            identifier: "CM".into(),
-        });
-        let mut project = A2lProject {
-            signals: vec![
-                ParsedSignal {
-                    name: "Rpm".into(),
-                    size: 2,
-                    ecu_address: 0x10,
-                    ..Default::default()
-                },
-                temp,
-            ],
-            ..Default::default()
-        };
-        project.compu_methods.insert(
-            "CM".into(),
-            CompuMethod {
-                factor: 0.1,
-                offset: -40.0,
-                unit: "degC".into(),
-                ..Default::default()
-            },
-        );
-        let daq_lists = vec![DaqList {
-            prescaler: 1,
-            id: 0,
-            first_pid: 1,
-            event: None,
-            odts: vec![
-                Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["Rpm".into()],
-                        ecu_address: 0x10,
-                        size: 2,
-                    }],
-                },
-                Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["Temp".into()],
-                        ecu_address: 0x20,
-                        size: 2,
-                    }],
-                },
-            ],
-            can_id: CanIdSource::Default,
-        }];
-        (project, daq_lists)
-    }
-
     #[test]
     fn dbc_mode_keeps_raw_and_phys_comparisons_on_separate_latches() {
-        let (project, lists) = scaled_project();
+        let (project, lists) = two_odt_project();
         let terms = parse_terms("Temp.Phys > 10 && Temp.Raw < 500").unwrap();
         let ResolvedTrigger {
             signals,
@@ -487,7 +428,7 @@ mod tests {
 
     #[test]
     fn comparison_idents_stay_aligned_when_reads_collapse() {
-        let (project, lists) = scaled_project();
+        let (project, lists) = two_odt_project();
         let terms = parse_terms("Rpm.Phys > 1000 && Rpm.Phys < 5000").unwrap();
         let r = resolve_terms(&terms, false, &project, &lists, TEST_CAN_ID).unwrap();
         assert_eq!(r.signals.len(), 1);
@@ -497,7 +438,7 @@ mod tests {
 
     #[test]
     fn inline_mode_rejects_a_scaled_raw_read() {
-        let (project, lists) = scaled_project();
+        let (project, lists) = two_odt_project();
         let terms = parse_terms("Temp.Raw > 500").unwrap();
         let err = resolve_terms(&terms, true, &project, &lists, TEST_CAN_ID).unwrap_err();
         assert_eq!(
@@ -513,7 +454,7 @@ mod tests {
 
     #[test]
     fn inline_mode_accepts_an_unscaled_raw_read() {
-        let (project, lists) = scaled_project();
+        let (project, lists) = two_odt_project();
         let terms = parse_terms("Rpm.Raw > 3000").unwrap();
         let r = resolve_terms(&terms, true, &project, &lists, TEST_CAN_ID).unwrap();
         assert_eq!(r.decoders.len(), 1);
@@ -524,7 +465,7 @@ mod tests {
 
     #[test]
     fn a_signal_no_frame_carries_is_reported() {
-        let (project, lists) = scaled_project();
+        let (project, lists) = two_odt_project();
         let terms = parse_terms("Ghost.Phys > 1").unwrap();
         let err = resolve_terms(&terms, false, &project, &lists, TEST_CAN_ID).unwrap_err();
         assert!(
@@ -538,7 +479,7 @@ mod tests {
 
     #[test]
     fn build_trigger_parses_and_resolves_in_one_step() {
-        let (project, lists) = scaled_project();
+        let (project, lists) = two_odt_project();
         let r = build_trigger(
             "Rpm.Phys > 3000 && Temp.Phys < 90",
             false,

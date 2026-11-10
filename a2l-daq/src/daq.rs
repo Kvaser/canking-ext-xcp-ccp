@@ -635,6 +635,20 @@ mod tests {
         }
     }
 
+    fn sig(name: &str, ecu_address: u64, size: u16, event: &str) -> ParsedSignal {
+        ParsedSignal {
+            name: name.into(),
+            ecu_address,
+            size,
+            event: Some(event.into()),
+            ..Default::default()
+        }
+    }
+
+    fn entries(list: &crate::DaqList) -> Vec<&crate::OdtEntry> {
+        list.odts.iter().flat_map(|o| &o.entries).collect()
+    }
+
     #[test]
     fn builds_daq_list_with_single_odt() {
         let (list, _) = build_daq_list(
@@ -666,22 +680,7 @@ mod tests {
 
     #[test]
     fn packs_multiple_entries_into_same_odt_when_space() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1004,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 2, "E"), sig("B", 0x1004, 4, "E")];
         let (list, _) = build_daq_list(
             &A2lProject {
                 signals,
@@ -698,22 +697,7 @@ mod tests {
 
     #[test]
     fn splits_entries_into_new_odt_when_overflow() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 3,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1004,
-                size: 5,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 3, "E"), sig("B", 0x1004, 5, "E")];
         let (list, _) = build_daq_list(
             &A2lProject {
                 signals,
@@ -728,22 +712,7 @@ mod tests {
 
     #[test]
     fn skips_event_groups_when_no_daq_slots_remain() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 2,
-                event: Some("E1".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 2,
-                event: Some("E2".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 2, "E1"), sig("B", 0x2000, 2, "E2")];
         let (list, unplaced) =
             build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(10)]);
         assert_eq!(list.len(), 1);
@@ -755,27 +724,9 @@ mod tests {
     #[test]
     fn respects_max_odt_limit_per_daq_list() {
         let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1004,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "C".into(),
-                ecu_address: 0x1008,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            },
+            sig("A", 0x1000, 4, "E"),
+            sig("B", 0x1004, 4, "E"),
+            sig("C", 0x1008, 4, "E"),
         ];
         let defs = vec![
             DaqListDef {
@@ -796,27 +747,9 @@ mod tests {
     #[test]
     fn respects_max_odt_entries_entry_count_per_odt() {
         let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 1,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1010,
-                size: 1,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "C".into(),
-                ecu_address: 0x1020,
-                size: 1,
-                event: Some("E".into()),
-                ..Default::default()
-            },
+            sig("A", 0x1000, 1, "E"),
+            sig("B", 0x1010, 1, "E"),
+            sig("C", 0x1020, 1, "E"),
         ];
         let daq = DaqListDef {
             identifier: 9,
@@ -830,17 +763,11 @@ mod tests {
 
     #[test]
     fn splits_large_signal_into_chunks() {
-        let signals = vec![ParsedSignal {
-            name: "Big".into(),
-            ecu_address: 0x2000,
-            size: 10,
-            event: Some("E".into()),
-            ..Default::default()
-        }];
+        let signals = vec![sig("Big", 0x2000, 10, "E")];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(1)]);
         assert_eq!(list.len(), 1);
-        let all_entries: Vec<_> = list[0].odts.iter().flat_map(|o| &o.entries).collect();
+        let all_entries = entries(&list[0]);
         assert_eq!(all_entries.len(), 2);
         assert_eq!(all_entries[0].names, vec!["Big[0]"]);
         assert_eq!(all_entries[0].size, 7);
@@ -852,16 +779,10 @@ mod tests {
 
     #[test]
     fn large_signal_exact_multiple_of_odt_size() {
-        let signals = vec![ParsedSignal {
-            name: "X".into(),
-            ecu_address: 0x3000,
-            size: 14,
-            event: Some("E".into()),
-            ..Default::default()
-        }];
+        let signals = vec![sig("X", 0x3000, 14, "E")];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(1)]);
-        let all_entries: Vec<_> = list[0].odts.iter().flat_map(|o| &o.entries).collect();
+        let all_entries = entries(&list[0]);
         assert_eq!(all_entries.len(), 2);
         assert_eq!(all_entries[0].size, 7);
         assert_eq!(all_entries[1].size, 7);
@@ -870,22 +791,7 @@ mod tests {
 
     #[test]
     fn merges_adjacent_signals_into_single_entry() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1002,
-                size: 3,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 2, "E"), sig("B", 0x1002, 3, "E")];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(1)]);
         let entries = &list[0].odts[0].entries;
@@ -902,25 +808,10 @@ mod tests {
 
     #[test]
     fn does_not_merge_when_combined_size_exceeds_odt_max() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1004,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 4, "E"), sig("B", 0x1004, 4, "E")];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(1)]);
-        let all_entries: Vec<_> = list[0].odts.iter().flat_map(|o| &o.entries).collect();
+        let all_entries = entries(&list[0]);
         assert_eq!(all_entries.len(), 2);
     }
 
@@ -930,27 +821,9 @@ mod tests {
         // Sequential fill: A->ODT0(5), B->ODT1(5), C->ODT2(2).
         // FFD:             A(5)->ODT0, B(5)->ODT1, C(2)->ODT0 -> 2 ODTs.
         let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 5,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 5,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "C".into(),
-                ecu_address: 0x3000,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
+            sig("A", 0x1000, 5, "E"),
+            sig("B", 0x2000, 5, "E"),
+            sig("C", 0x3000, 2, "E"),
         ];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(1)]);
@@ -963,13 +836,7 @@ mod tests {
 
     #[test]
     fn splits_signal_at_max_odt_entry_size_not_odt_frame_size() {
-        let signals = vec![ParsedSignal {
-            name: "Val".into(),
-            ecu_address: 0x5000,
-            size: 5,
-            event: Some("E".into()),
-            ..Default::default()
-        }];
+        let signals = vec![sig("Val", 0x5000, 5, "E")];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 4, 0), vec![unlimited_daq(1)]);
         assert_eq!(
@@ -977,7 +844,7 @@ mod tests {
             1,
             "both chunks fit byte-wise in one ODT"
         );
-        let all_entries: Vec<_> = list[0].odts.iter().flat_map(|o| &o.entries).collect();
+        let all_entries = entries(&list[0]);
         assert_eq!(
             all_entries.len(),
             2,
@@ -1039,28 +906,13 @@ mod tests {
             1,
             "all four entries fit one 23-byte CAN FD ODT"
         );
-        let entries: Vec<_> = list[0].odts.iter().flat_map(|o| &o.entries).collect();
+        let entries = entries(&list[0]);
         assert_eq!(entries.len(), 4);
     }
 
     #[test]
     fn static_routes_signals_to_their_event_fixed_list() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("Rev".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 4,
-                event: Some("5ms".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 4, "Rev"), sig("B", 0x2000, 4, "5ms")];
         let events = vec![event(0, "Rev"), event(1, "5ms")];
         let defs = vec![fixed_daq(0, 0), fixed_daq(1, 1)];
 
@@ -1082,22 +934,7 @@ mod tests {
 
     #[test]
     fn static_overflow_does_not_borrow_another_events_list() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 7,
-                event: Some("Rev".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 7,
-                event: Some("Rev".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 7, "Rev"), sig("B", 0x2000, 7, "Rev")];
         let events = vec![event(0, "Rev"), event(1, "5ms")];
         let defs = vec![
             DaqListDef {
@@ -1114,7 +951,7 @@ mod tests {
         assert_eq!(lists.len(), 1, "only the event-0 list is used");
         assert_eq!(unplaced.len(), 1, "signal B should be unplaced");
         assert_eq!(lists[0].id, 0);
-        let entries: Vec<_> = lists[0].odts.iter().flat_map(|o| &o.entries).collect();
+        let entries = entries(&lists[0]);
         assert_eq!(
             entries.len(),
             1,
@@ -1148,13 +985,7 @@ mod tests {
 
     #[test]
     fn static_uses_freely_assignable_list_as_fallback() {
-        let signals = vec![ParsedSignal {
-            name: "A".into(),
-            ecu_address: 0x1000,
-            size: 4,
-            event: Some("Rev".into()),
-            ..Default::default()
-        }];
+        let signals = vec![sig("A", 0x1000, 4, "Rev")];
         let events = vec![event(0, "Rev")];
         let defs = vec![unlimited_daq(7)]; // event_fixed: None
 
@@ -1168,27 +999,9 @@ mod tests {
     #[test]
     fn fixed_timestamp_shrinks_first_odt_so_frame_never_overflows() {
         let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1002,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "C".into(),
-                ecu_address: 0x1004,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
+            sig("A", 0x1000, 2, "E"),
+            sig("B", 0x1002, 2, "E"),
+            sig("C", 0x1004, 2, "E"),
         ];
         let (list, unplaced) =
             build_daq_list_with_packing(signals, limits(7, 0, 4), vec![unlimited_daq(0)]);
@@ -1206,13 +1019,7 @@ mod tests {
 
     #[test]
     fn fixed_timestamp_keeps_small_entries_in_first_odt() {
-        let signals = vec![ParsedSignal {
-            name: "A".into(),
-            ecu_address: 0x1000,
-            size: 1,
-            event: Some("E".into()),
-            ..Default::default()
-        }];
+        let signals = vec![sig("A", 0x1000, 1, "E")];
         let (list, _) =
             build_daq_list_with_packing(signals, limits(7, 0, 4), vec![unlimited_daq(0)]);
         assert_eq!(list[0].odts.len(), 1, "single small entry fits ODT 0");
@@ -1222,27 +1029,9 @@ mod tests {
     #[test]
     fn ccp_packs_one_list_per_raster_with_sequential_ids() {
         let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("DAQ_CHAN1".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 4,
-                event: Some("DAQ_CHAN2".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "C".into(),
-                ecu_address: 0x2100,
-                size: 4,
-                event: Some("DAQ_CHAN2".into()),
-                ..Default::default()
-            },
+            sig("A", 0x1000, 4, "DAQ_CHAN1"),
+            sig("B", 0x2000, 4, "DAQ_CHAN2"),
+            sig("C", 0x2100, 4, "DAQ_CHAN2"),
         ];
         let (lists, unplaced) = build_daq_list_ccp(signals, None);
         assert!(unplaced.is_empty());
@@ -1260,22 +1049,7 @@ mod tests {
 
     #[test]
     fn ccp_takes_list_numbers_and_pids_from_source_blocks() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("Fast".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 4,
-                event: Some("Slow".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 4, "Fast"), sig("B", 0x2000, 4, "Slow")];
 
         let ccp = CcpData {
             rasters: vec![event(4, "Slow"), event(7, "Fast")],
@@ -1310,22 +1084,7 @@ mod tests {
 
     #[test]
     fn ccp_steps_over_every_odt_a_source_reserves() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("Fast".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 4,
-                event: Some("Slow".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 4, "Fast"), sig("B", 0x2000, 4, "Slow")];
         let ccp = CcpData {
             rasters: vec![event(0, "Fast"), event(1, "Slow")],
             sources: vec![
@@ -1358,22 +1117,7 @@ mod tests {
 
     #[test]
     fn ccp_falls_back_to_list_numbers_no_source_claims() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("Declared".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 4,
-                event: Some("Bare".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 4, "Declared"), sig("B", 0x2000, 4, "Bare")];
         let ccp = CcpData {
             rasters: vec![event(0, "Declared"), event(1, "Bare")],
             sources: vec![CcpSource {
@@ -1397,13 +1141,7 @@ mod tests {
 
     #[test]
     fn ccp_matches_a_source_by_name_when_it_declares_no_raster() {
-        let signals = vec![ParsedSignal {
-            name: "A".into(),
-            ecu_address: 0x1000,
-            size: 2,
-            event: Some("CCP_10ms List".into()),
-            ..Default::default()
-        }];
+        let signals = vec![sig("A", 0x1000, 2, "CCP_10ms List")];
         let ccp = CcpData {
             rasters: vec![event(0, "CCP_10ms List")],
             sources: vec![CcpSource {
@@ -1423,22 +1161,7 @@ mod tests {
 
     #[test]
     fn ccp_splits_into_seven_byte_odts() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 4,
-                event: Some("R".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x2000,
-                size: 4,
-                event: Some("R".into()),
-                ..Default::default()
-            },
-        ];
+        let signals = vec![sig("A", 0x1000, 4, "R"), sig("B", 0x2000, 4, "R")];
         let (lists, _) = build_daq_list_ccp(signals, None);
         assert_eq!(lists.len(), 1);
         assert_eq!(lists[0].odts.len(), 2);
@@ -1447,13 +1170,7 @@ mod tests {
     #[test]
     fn build_daq_list_dispatches_to_ccp_path() {
         let project = A2lProject {
-            signals: vec![ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 2,
-                event: Some("R".into()),
-                ..Default::default()
-            }],
+            signals: vec![sig("A", 0x1000, 2, "R")],
             ccp_data: Some(CcpData {
                 rasters: vec![event(0, "R")],
                 ..Default::default()
@@ -1572,13 +1289,7 @@ mod tests {
         let mut xcp = xcp_with_daq_lists_and_entry_size(vec![unlimited_daq(0)], 4);
         xcp.as_mut().unwrap().daq_info.odt_entry_granularity = 4;
         let project = A2lProject {
-            signals: vec![ParsedSignal {
-                name: "F".into(),
-                ecu_address: 0x102,
-                size: 4,
-                event: Some("E".into()),
-                ..Default::default()
-            }],
+            signals: vec![sig("F", 0x102, 4, "E")],
             xcp_data: xcp,
             ..Default::default()
         };

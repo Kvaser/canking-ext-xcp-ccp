@@ -284,6 +284,7 @@ fn signals_for_can_id(
 
 #[cfg(test)]
 mod tests {
+    use super::test_util::two_can_id_project;
     use super::*;
 
     #[test]
@@ -343,69 +344,6 @@ mod tests {
             .expect("CCP init built from TP_BLOB ids");
         assert_eq!(init.master_id, 0x455);
         assert_eq!(init.slave_id, 0x456);
-    }
-
-    fn two_can_id_project() -> (A2lProject, Vec<DaqList>) {
-        use crate::a2l::{CanIdSource, DaqInfo, EventInfo, ParsedSignal, XcpData, XcpInfo};
-        use crate::daq::{Odt, OdtEntry};
-
-        let project = A2lProject {
-            signals: vec![
-                ParsedSignal {
-                    name: "A".into(),
-                    size: 2,
-                    ecu_address: 0x10,
-                    ..Default::default()
-                },
-                ParsedSignal {
-                    name: "B".into(),
-                    size: 2,
-                    ecu_address: 0x2000,
-                    ..Default::default()
-                },
-            ],
-            xcp_data: Some(XcpData {
-                daq_info: DaqInfo::default(),
-                event_info: EventInfo::default(),
-                xcp_info: Some(XcpInfo {
-                    can_id_slave: Some(0x456),
-                    ..Default::default()
-                }),
-                protocol_layer: None,
-            }),
-            ..Default::default()
-        };
-        let daq_lists = vec![
-            DaqList {
-                prescaler: 1,
-                id: 0,
-                first_pid: 1,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["A".into()],
-                        ecu_address: 0x10,
-                        size: 2,
-                    }],
-                }],
-                can_id: CanIdSource::Default,
-            },
-            DaqList {
-                prescaler: 1,
-                id: 1,
-                first_pid: 2,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["B".into()],
-                        ecu_address: 0x2000,
-                        size: 2,
-                    }],
-                }],
-                can_id: CanIdSource::Fixed { id: 0x789 },
-            },
-        ];
-        (project, daq_lists)
     }
 
     #[test]

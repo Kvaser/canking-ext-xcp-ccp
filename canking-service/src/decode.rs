@@ -526,7 +526,6 @@ mod tests {
     use protocol_core::types::{CanIdSource, DaqList, Odt, OdtEntry, ParsedSignal};
 
     fn two_list_config() -> Config {
-        let mut cfg = Config::sample();
         let mut second = ParsedSignal {
             name: "Load".to_string(),
             long_identifier: "Engine load".to_string(),
@@ -537,21 +536,27 @@ mod tests {
             ..Default::default()
         };
         second.upper_limit = 255.0;
-        cfg.project.signals.push(second);
+        with_second_list(second)
+    }
+
+    /// The sample config plus `signal`, alone in a second DAQ list (id 1, PID 1) on the default CAN id.
+    fn with_second_list(signal: ParsedSignal) -> Config {
+        let mut cfg = Config::sample();
         cfg.daq_lists.push(DaqList {
             prescaler: 1,
             id: 1,
             first_pid: 1,
             odts: vec![Odt {
                 entries: vec![OdtEntry {
-                    names: vec!["Load".to_string()],
-                    ecu_address: 0x2000,
-                    size: 1,
+                    names: vec![signal.name.clone()],
+                    ecu_address: signal.ecu_address,
+                    size: signal.size,
                 }],
             }],
             event: Some("Task100ms".to_string()),
             can_id: CanIdSource::Default,
         });
+        cfg.project.signals.push(signal);
         cfg
     }
 
@@ -725,7 +730,7 @@ mod tests {
     #[test]
     fn decodes_scaled_unsigned_signal() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let frame = [0x00, 0x90, 0x01];
         let decoded = decoder.decode(0x456, &frame);
@@ -738,7 +743,7 @@ mod tests {
     #[test]
     fn ignores_other_can_ids_and_unknown_pids() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
         assert!(decoder.decode(0x123, &[0x00, 0x90, 0x01]).is_empty());
         assert!(decoder.decode(0x456, &[0x09, 0x90, 0x01]).is_empty());
     }
@@ -746,14 +751,14 @@ mod tests {
     #[test]
     fn truncated_frame_is_skipped() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
         assert!(decoder.decode(0x456, &[0x00]).is_empty());
     }
 
     #[test]
     fn signal_metadata_resolves_project_info() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
         let meta = decoder.signal_metadata(&cfg.project);
         assert_eq!(meta.len(), 1);
         assert_eq!(meta[0].name, "Rpm");
@@ -772,7 +777,7 @@ mod tests {
         daq_info.timestamp_fixed = true;
         daq_info.timestamp_size = 4;
 
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let frame = [0x00, 0x10, 0x00, 0x00, 0x00, 0x90, 0x01];
         let decoded = decoder.decode(0x456, &frame);
@@ -789,8 +794,7 @@ mod tests {
 
     #[test]
     fn masked_bitfield_signal_decodes_only_its_own_bits() {
-        let mut cfg = Config::sample();
-        let masked = ParsedSignal {
+        let cfg = with_second_list(ParsedSignal {
             name: "Masked".to_string(),
             long_identifier: String::new(),
             conversion: None,
@@ -799,24 +803,9 @@ mod tests {
             bit_mask: Some(0x0FF0),
             event: Some("Task100ms".to_string()),
             ..Default::default()
-        };
-        cfg.project.signals.push(masked);
-        cfg.daq_lists.push(DaqList {
-            prescaler: 1,
-            id: 1,
-            first_pid: 1,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Masked".to_string()],
-                    ecu_address: 0x3000,
-                    size: 2,
-                }],
-            }],
-            event: Some("Task100ms".to_string()),
-            can_id: CanIdSource::Default,
         });
 
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let decoded = decoder.decode(0x456, &[0x01, 0xF0, 0x00]);
         assert_eq!(decoded.len(), 1);
@@ -841,8 +830,7 @@ mod tests {
 
     #[test]
     fn full_width_bit_mask_is_a_no_op() {
-        let mut cfg = Config::sample();
-        let unmasked = ParsedSignal {
+        let cfg = with_second_list(ParsedSignal {
             name: "FullMask".to_string(),
             long_identifier: String::new(),
             conversion: None,
@@ -851,24 +839,9 @@ mod tests {
             bit_mask: Some(0xFFFF),
             event: Some("Task100ms".to_string()),
             ..Default::default()
-        };
-        cfg.project.signals.push(unmasked);
-        cfg.daq_lists.push(DaqList {
-            prescaler: 1,
-            id: 1,
-            first_pid: 1,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["FullMask".to_string()],
-                    ecu_address: 0x4000,
-                    size: 2,
-                }],
-            }],
-            event: Some("Task100ms".to_string()),
-            can_id: CanIdSource::Default,
         });
 
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let decoded = decoder.decode(0x456, &[0x01, 0x34, 0x12]);
         assert_eq!(decoded[0].value, 0x1234 as f64);

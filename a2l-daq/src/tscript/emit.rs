@@ -690,41 +690,36 @@ mod tests {
     use crate::tscript::test_util::*;
     use crate::tscript::*;
 
+    fn function_body<'a>(t: &'a str, head: &str) -> &'a str {
+        t.split(head)
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .unwrap_or_else(|| panic!("no `{head}` in:\n{t}"))
+    }
+
     #[test]
     fn generates_basic_tscript() {
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![
-                CanChannel {
-                    index: 0,
-                    bitrate: 1_000_000,
-                    data_bitrate: None,
-                },
-                CanChannel {
-                    index: 1,
-                    bitrate: 500_000,
-                    data_bitrate: None,
-                },
-            ],
-            pretrigger_ms: 200,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("PowertrainStatus".into()),
-                trigger: Some(TriggerCondition {
-                    signals: vec![signal("EngineSpeed", 0, "this.EngineSpeed.Phys")],
-                    comparisons: vec![comparison("EngineSpeed", ">", "4000")],
-                    action: TriggerAction::StartLogger,
-                }),
-                handles_responses: true,
-            }],
-            timer_ms: Some(8000),
-            daq_init: None,
-            can_fd: false,
-            traceability: vec![],
-            decoders: vec![],
-        };
+        let mut config = dbc_config();
+        config.channels = vec![
+            CanChannel {
+                index: 0,
+                bitrate: 1_000_000,
+                data_bitrate: None,
+            },
+            CanChannel {
+                index: 1,
+                bitrate: 500_000,
+                data_bitrate: None,
+            },
+        ];
+        config.pretrigger_ms = 200;
+        config.signals[0].message = MessageRef::Dbc("PowertrainStatus".into());
+        config.signals[0].trigger = Some(TriggerCondition {
+            signals: vec![signal("EngineSpeed", 0, "this.EngineSpeed.Phys")],
+            comparisons: vec![comparison("EngineSpeed", ">", "4000")],
+            action: TriggerAction::StartLogger,
+        });
+        config.timer_ms = Some(8000);
         let tscript = generate_tscript(&config);
         assert!(tscript.contains("const int can_channel = 0;"));
         assert!(tscript.contains("const int bitrate = 1000000;"));
@@ -742,28 +737,8 @@ mod tests {
 
     #[test]
     fn traceability_lines_appear_in_header() {
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 500_000,
-                data_bitrate: None,
-            }],
-            pretrigger_ms: 0,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("DAQ".into()),
-                trigger: None,
-                handles_responses: true,
-            }],
-            timer_ms: None,
-            daq_init: None,
-            can_fd: false,
-            traceability: vec!["Source A2L: MyEcu.a2l".into(), "Protocol: XCP".into()],
-            decoders: vec![],
-        };
+        let mut config = dbc_config();
+        config.traceability = vec!["Source A2L: MyEcu.a2l".into(), "Protocol: XCP".into()];
         let t = generate_tscript(&config);
         assert!(t.contains("--- Generated from ---"), "got:\n{t}");
         assert!(t.contains("Source A2L: MyEcu.a2l"), "got:\n{t}");
@@ -773,35 +748,20 @@ mod tests {
 
     #[test]
     fn generates_can_fd_bus_config_and_frame_flags() {
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 1_000_000,
-                data_bitrate: Some(2_000_000),
-            }],
-            pretrigger_ms: 200,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("Test".into()),
-                trigger: None,
-                handles_responses: true,
-            }],
-            timer_ms: None,
-            daq_init: Some(DaqInit {
-                protocol: Protocol::Xcp,
-                master_id: 0x455,
-                slave_id: 0x456,
-                timeout_ms: 1000,
-                commands: vec![cmd(vec![0xFF, 0x00], "CONNECT")],
-                stop_commands: vec![stop_cmd(vec![0xFE], "DISCONNECT")],
-            }),
-            can_fd: true,
-            traceability: vec![],
-            decoders: vec![],
-        };
+        let mut config = init_config(
+            Protocol::Xcp,
+            vec![cmd(vec![0xFF, 0x00], "CONNECT")],
+            vec![stop_cmd(vec![0xFE], "DISCONNECT")],
+        );
+        config.channels = vec![CanChannel {
+            index: 0,
+            bitrate: 1_000_000,
+            data_bitrate: Some(2_000_000),
+        }];
+        config.pretrigger_ms = 200;
+        config.signals[0].message = MessageRef::Dbc("Test".into());
+        config.timer_ms = None;
+        config.can_fd = true;
         let t = generate_tscript(&config);
         assert!(t.contains("const int bitrate = canFD_BITRATE_1M_80P;"));
         assert!(t.contains("const int data_bitrate = canFD_BITRATE_2M_80P;"));
@@ -820,32 +780,13 @@ mod tests {
 
     #[test]
     fn no_xcp_init_omits_response_handler() {
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 500_000,
-                data_bitrate: None,
-            }],
-            pretrigger_ms: 200,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("DAQ".into()),
-                trigger: Some(TriggerCondition {
-                    signals: vec![signal("Speed", 0, "this.Speed.Phys")],
-                    comparisons: vec![comparison("Speed", ">", "10")],
-                    action: TriggerAction::StartLogger,
-                }),
-                handles_responses: true,
-            }],
-            timer_ms: None,
-            daq_init: None,
-            can_fd: false,
-            traceability: vec![],
-            decoders: vec![],
-        };
+        let mut config = dbc_config();
+        config.pretrigger_ms = 200;
+        config.signals[0].trigger = Some(TriggerCondition {
+            signals: vec![signal("Speed", 0, "this.Speed.Phys")],
+            comparisons: vec![comparison("Speed", ">", "10")],
+            action: TriggerAction::StartLogger,
+        });
         let t = generate_tscript(&config);
         assert!(!t.contains("init_state"), "got:\n{t}");
         assert!(!t.contains("INIT_STATES"));
@@ -857,28 +798,9 @@ mod tests {
 
     #[test]
     fn classic_can_omits_fd_calls() {
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 500_000,
-                data_bitrate: None,
-            }],
-            pretrigger_ms: 200,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("Test".into()),
-                trigger: None,
-                handles_responses: true,
-            }],
-            timer_ms: None,
-            daq_init: None,
-            can_fd: false,
-            traceability: vec![],
-            decoders: vec![],
-        };
+        let mut config = dbc_config();
+        config.pretrigger_ms = 200;
+        config.signals[0].message = MessageRef::Dbc("Test".into());
         let t = generate_tscript(&config);
         assert!(!t.contains("canMODE_CAN_FD"));
         assert!(!t.contains("data_bitrate"));
@@ -886,42 +808,24 @@ mod tests {
 
     #[test]
     fn generates_xcp_init_state_machine() {
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 500_000,
-                data_bitrate: None,
-            }],
-            pretrigger_ms: 200,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("Test".into()),
-                trigger: None,
-                handles_responses: true,
-            }],
-            timer_ms: None,
-            daq_init: Some(DaqInit {
-                protocol: Protocol::Xcp,
-                master_id: 0x51,
-                slave_id: 0x52,
-                timeout_ms: 200,
-                commands: vec![
-                    cmd(vec![0xFF, 0x00], "CONNECT"),
-                    cmd(vec![0xFD], "GET_STATUS"),
-                    cmd(vec![0xDD, 0x01], "START_STOP_SYNCH"),
-                ],
-                stop_commands: vec![
-                    stop_cmd(vec![0xDD, 0x00], "START_STOP_SYNCH  stop all"),
-                    stop_cmd(vec![0xFE], "DISCONNECT"),
-                ],
-            }),
-            can_fd: false,
-            traceability: vec![],
-            decoders: vec![],
-        };
+        let mut config = dbc_config();
+        config.pretrigger_ms = 200;
+        config.signals[0].message = MessageRef::Dbc("Test".into());
+        config.daq_init = Some(DaqInit {
+            protocol: Protocol::Xcp,
+            master_id: 0x51,
+            slave_id: 0x52,
+            timeout_ms: 200,
+            commands: vec![
+                cmd(vec![0xFF, 0x00], "CONNECT"),
+                cmd(vec![0xFD], "GET_STATUS"),
+                cmd(vec![0xDD, 0x01], "START_STOP_SYNCH"),
+            ],
+            stop_commands: vec![
+                stop_cmd(vec![0xDD, 0x00], "START_STOP_SYNCH  stop all"),
+                stop_cmd(vec![0xFE], "DISCONNECT"),
+            ],
+        });
         let t = generate_tscript(&config);
         assert!(t.contains("const int master_id = 0x51;"));
         assert!(t.contains("const int slave_id = 0x52;"));
@@ -1013,11 +917,7 @@ mod tests {
                 t.contains("    byte stopData1[2] = {0x07, 0x01};"),
                 "{protocol:?}:\n{t}"
             );
-            let restart = t
-                .split("void restartDaqInit() {")
-                .nth(1)
-                .and_then(|rest| rest.split("\n}").next())
-                .unwrap_or_else(|| panic!("{protocol:?}: no restartDaqInit:\n{t}"));
+            let restart = function_body(&t, "void restartDaqInit() {");
             assert!(
                 restart.contains("sendDaqStop(master_id);"),
                 "{protocol:?}:\n{t}"
@@ -1157,35 +1057,15 @@ mod tests {
             ("Rpm".to_string(), Accessor::Phys),
             ("Temp".to_string(), Accessor::Phys),
         ];
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 500_000,
-                data_bitrate: None,
-            }],
-            pretrigger_ms: 0,
-            signals: vec![SignalHook {
-                stop: None,
-                message: MessageRef::Dbc("DAQ".into()),
-                trigger: Some(TriggerCondition {
-                    signals: dbc_trigger_signals(&project, &daq_lists, &reads).unwrap(),
-                    comparisons: vec![
-                        comparison("Rpm", ">", "3000"),
-                        comparison("Temp", "<", "90"),
-                    ],
-                    action: TriggerAction::StartLogger,
-                }),
-                handles_responses: true,
-            }],
-            timer_ms: None,
-            daq_init: None,
-            can_fd: false,
-            traceability: vec![],
-            decoders: vec![],
-        };
+        let mut config = dbc_config();
+        config.signals[0].trigger = Some(TriggerCondition {
+            signals: dbc_trigger_signals(&project, &daq_lists, &reads).unwrap(),
+            comparisons: vec![
+                comparison("Rpm", ">", "3000"),
+                comparison("Temp", "<", "90"),
+            ],
+            action: TriggerAction::StartLogger,
+        });
         let t = generate_tscript(&config);
 
         assert!(t.contains("on CanMessage<*> DAQ {"), "got:\n{t}");
@@ -1304,66 +1184,7 @@ mod tests {
 
     #[test]
     fn standalone_script_hooks_every_can_id_a_daq_list_transmits_on() {
-        use crate::a2l::{CanIdSource, DaqInfo, EventInfo, ParsedSignal, XcpData, XcpInfo};
-        use crate::daq::{Odt, OdtEntry};
-
-        let project = A2lProject {
-            signals: vec![
-                ParsedSignal {
-                    name: "A".into(),
-                    size: 2,
-                    ecu_address: 0x10,
-                    ..Default::default()
-                },
-                ParsedSignal {
-                    name: "B".into(),
-                    size: 2,
-                    ecu_address: 0x2000,
-                    ..Default::default()
-                },
-            ],
-            xcp_data: Some(XcpData {
-                daq_info: DaqInfo::default(),
-                event_info: EventInfo::default(),
-                xcp_info: Some(XcpInfo {
-                    can_id_master: Some(0x455),
-                    can_id_slave: Some(0x456),
-                    ..Default::default()
-                }),
-                protocol_layer: None,
-            }),
-            ..Default::default()
-        };
-        let daq_lists = vec![
-            DaqList {
-                prescaler: 1,
-                id: 0,
-                first_pid: 1,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["A".into()],
-                        ecu_address: 0x10,
-                        size: 2,
-                    }],
-                }],
-                can_id: CanIdSource::Default,
-            },
-            DaqList {
-                prescaler: 1,
-                id: 1,
-                first_pid: 2,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["B".into()],
-                        ecu_address: 0x2000,
-                        size: 2,
-                    }],
-                }],
-                can_id: CanIdSource::Fixed { id: 0x789 },
-            },
-        ];
+        let (project, daq_lists) = two_can_id_project();
 
         let terms = parse_terms("A > 1 && B > 2").unwrap();
         let resolved = resolve_terms(&terms, true, &project, &daq_lists, 0x456).unwrap();
@@ -1377,26 +1198,13 @@ mod tests {
         )
         .unwrap();
 
-        let config = TScriptConfig {
-            stop_can_id: None,
-            max_captures: None,
-            daq_watchdog_ms: None,
-            channels: vec![CanChannel {
-                index: 0,
-                bitrate: 500_000,
-                data_bitrate: None,
-            }],
-            pretrigger_ms: 0,
-            signals,
-            timer_ms: None,
-            daq_init: Some(
-                build_daq_init(Protocol::Xcp, &project, &daq_lists, 1000)
-                    .expect("master/slave ids present"),
-            ),
-            can_fd: false,
-            traceability: vec![],
-            decoders: resolved.decoders,
-        };
+        let mut config = dbc_config();
+        config.signals = signals;
+        config.daq_init = Some(
+            build_daq_init(Protocol::Xcp, &project, &daq_lists, 1000)
+                .expect("master/slave ids present"),
+        );
+        config.decoders = resolved.decoders;
         let t = generate_tscript(&config);
 
         assert_eq!(
@@ -1446,11 +1254,7 @@ mod tests {
         config.daq_watchdog_ms = daq_watchdog_ms;
         config.signals[0].trigger = Some(TriggerCondition {
             signals: vec![signal("Rpm", 1, "this.Rpm.Phys")],
-            comparisons: vec![Comparison {
-                ident: "Rpm".into(),
-                op: CompareOp::Gt,
-                value: "3000".into(),
-            }],
+            comparisons: vec![comparison("Rpm", ">", "3000")],
             action: TriggerAction::StartLogger,
         });
         config
@@ -1480,13 +1284,7 @@ mod tests {
             "no limit by default, got:\n{t}"
         );
 
-        let log_timer = t
-            .split("on Timer logTimer {")
-            .nth(1)
-            .unwrap()
-            .split("\n}")
-            .next()
-            .unwrap();
+        let log_timer = function_body(&t, "on Timer logTimer {");
         assert!(
             log_timer.contains("loggerStop();") && log_timer.contains("logging = 0;"),
             "got:\n{t}"
@@ -1505,13 +1303,7 @@ mod tests {
             t.contains("if (armed == 1 && captures < MAX_CAPTURES) {"),
             "got:\n{t}"
         );
-        let log_timer = t
-            .split("on Timer logTimer {")
-            .nth(1)
-            .unwrap()
-            .split("\n}")
-            .next()
-            .unwrap();
+        let log_timer = function_body(&t, "on Timer logTimer {");
         let last = log_timer
             .split("if (captures >= MAX_CAPTURES) {")
             .nth(1)
@@ -1558,13 +1350,6 @@ mod tests {
         let without = generate_tscript(&timed_config(None, None));
         assert!(!without.contains("daqWatchdog"), "got:\n{without}");
         assert!(!without.contains("daq_seen"), "got:\n{without}");
-    }
-
-    fn function_body<'a>(t: &'a str, head: &str) -> &'a str {
-        t.split(head)
-            .nth(1)
-            .and_then(|rest| rest.split("\n}").next())
-            .unwrap_or_else(|| panic!("no `{head}` in:\n{t}"))
     }
 
     #[test]

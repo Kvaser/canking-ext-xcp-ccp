@@ -386,6 +386,24 @@ mod tests {
         }
     }
 
+    /// A list holding one single-entry ODT.
+    fn daq_list(id: u16, name: &str, ecu_address: u64, size: u16, can_id: CanIdSource) -> DaqList {
+        DaqList {
+            prescaler: 1,
+            id,
+            first_pid: 0,
+            event: None,
+            odts: vec![Odt {
+                entries: vec![OdtEntry {
+                    names: vec![name.into()],
+                    ecu_address,
+                    size,
+                }],
+            }],
+            can_id,
+        }
+    }
+
     fn daq_lists_16_bytes() -> Vec<DaqList> {
         let entries = (0..4)
             .map(|i| OdtEntry {
@@ -448,20 +466,13 @@ mod tests {
             ecu_address: 0x20005EFC,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            prescaler: 1,
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["FloatSignal".into()],
-                    ecu_address: 0x20005EFC,
-                    size: 4,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(
+            0,
+            "FloatSignal",
+            0x20005EFC,
+            4,
+            CanIdSource::Default,
+        )];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(
             dbc.contains("SIG_VALTYPE_ 1110 FloatSignal : 1;"),
@@ -510,20 +521,7 @@ mod tests {
                 unsupported: None,
             },
         );
-        let daq = vec![DaqList {
-            prescaler: 1,
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["EngSt".into()],
-                    ecu_address: 0x10,
-                    size: 1,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "EngSt", 0x10, 1, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(
             dbc.contains("VAL_ 1110 EngSt 0 \"ENGST_DEFAULT\" 1 \"ENGST_START\" ;"),
@@ -546,20 +544,7 @@ mod tests {
             ecu_address: 0x10,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            prescaler: 1,
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Sig".into()],
-                    ecu_address: 0x10,
-                    size: 2,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "Sig", 0x10, 2, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(dbc.contains(" SG_ Timestamp_0 m0 : 8|32@1+"), "got:\n{dbc}");
         assert!(
@@ -582,20 +567,7 @@ mod tests {
             ecu_address: 0x10,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            prescaler: 1,
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Sig".into()],
-                    ecu_address: 0x10,
-                    size: 2,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "Sig", 0x10, 2, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(dbc.contains(" SG_ Timestamp_0 m0 : 8|32@1+"), "got:\n{dbc}");
         assert!(
@@ -618,20 +590,7 @@ mod tests {
             ecu_address: 0x10,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            prescaler: 1,
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Sig".into()],
-                    ecu_address: 0x10,
-                    size: 2,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "Sig", 0x10, 2, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(!dbc.contains("Timestamp_0"));
         assert!(
@@ -742,34 +701,8 @@ mod tests {
             },
         ];
         let daq = vec![
-            DaqList {
-                prescaler: 1,
-                id: 0,
-                first_pid: 0,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["Rpm".into()],
-                        ecu_address: 0x10,
-                        size: 2,
-                    }],
-                }],
-                can_id: CanIdSource::Default,
-            },
-            DaqList {
-                prescaler: 1,
-                id: 1,
-                first_pid: 0,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["Load".into()],
-                        ecu_address: 0x2000,
-                        size: 1,
-                    }],
-                }],
-                can_id: CanIdSource::Fixed { id: 0x789 },
-            },
+            daq_list(0, "Rpm", 0x10, 2, CanIdSource::Default),
+            daq_list(1, "Load", 0x2000, 1, CanIdSource::Fixed { id: 0x789 }),
         ];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
 
