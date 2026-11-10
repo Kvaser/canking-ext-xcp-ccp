@@ -28,7 +28,6 @@ name = "daq-decoder"
 version = "1.1.0"
 dependencies = [
  "protocol-core",
- "serde",
  "serde_json",
  "wit-bindgen",
 ]

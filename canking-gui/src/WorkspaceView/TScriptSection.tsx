@@ -1,5 +1,5 @@
 import { Box, Checkbox, FormControlLabel, TextField, Typography } from '@mui/material';
-import { DEFAULT_TSCRIPT_OPTIONS, parseNonNegativeInt, parseOptionalPositiveInt, TScriptOptions } from './util';
+import { parseBoundedInt, parseNonNegativeInt, TScriptOptions } from './util';
 
 export interface TScriptSectionProps {
   options: TScriptOptions;
@@ -19,10 +19,8 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
   const channelError = parseNonNegativeInt(options.channelIndex) === null;
   const pretriggerError = parseNonNegativeInt(options.pretriggerMs) === null;
   const timerError = options.timerStop && parseNonNegativeInt(options.timerMs) === null;
-  const maxCaptures = options.maxCaptures ?? DEFAULT_TSCRIPT_OPTIONS.maxCaptures ?? '';
-  const watchdogMs = options.watchdogMs ?? DEFAULT_TSCRIPT_OPTIONS.watchdogMs ?? '';
-  const capturesError = options.timerStop && parseOptionalPositiveInt(maxCaptures) === null;
-  const watchdogError = parseOptionalPositiveInt(watchdogMs) === null;
+  const capturesError = options.timerStop && parseBoundedInt(options.maxCaptures, undefined, 1) === null;
+  const watchdogError = parseBoundedInt(options.watchdogMs, undefined, 1) === null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, my: 1 }}>
@@ -70,7 +68,7 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
             size="small"
             label="Captures"
             placeholder="no limit"
-            value={maxCaptures}
+            value={options.maxCaptures}
             disabled={!options.timerStop}
             error={capturesError}
             helperText={capturesError ? 'From 1, or blank' : undefined}
@@ -87,7 +85,7 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
         size="small"
         label="Restart DAQ after silence (ms)"
         placeholder="never"
-        value={watchdogMs}
+        value={options.watchdogMs}
         error={watchdogError}
         helperText={watchdogError ? 'From 1, or blank' : undefined}
         onChange={e => patch({ watchdogMs: e.target.value })}
@@ -99,9 +97,7 @@ function TScriptSection({ options, onOptionsChange }: TScriptSectionProps) {
         starts over after 5 s.
       </Typography>
       <FormControlLabel
-        control={
-          <Checkbox checked={options.standalone ?? false} onChange={e => patch({ standalone: e.target.checked })} />
-        }
+        control={<Checkbox checked={options.standalone} onChange={e => patch({ standalone: e.target.checked })} />}
         label="Standalone t-script (no DBC needed, experimental feature)"
       />
       <Typography variant="caption" color="text.secondary">

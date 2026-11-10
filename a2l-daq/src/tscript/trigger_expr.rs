@@ -3,8 +3,11 @@
 //! The CLI takes a trigger as one line of text (`Rpm.Phys > 3000 && Temp.Phys < 90`).
 //! This module turns that into [`TriggerTerm`]s and then resolves them against the DAQ layout
 
+use super::inline_signals::decoders_for;
 use super::inline_signals::{SignalDecoder, TriggerError};
-use super::trigger::{Accessor, CompareOp, Comparison, TriggerSignal, resolve_trigger};
+use super::trigger::{
+    Accessor, CompareOp, Comparison, TriggerSignal, dbc_trigger_signals, inline_trigger_signals,
+};
 use crate::a2l::A2lProject;
 use crate::daq::DaqList;
 use std::error::Error;
@@ -139,8 +142,8 @@ pub fn parse_terms(expr: &str) -> Result<Vec<TriggerTerm>, TriggerExprError> {
 /// Resolve parsed terms into the pieces a [`crate::TriggerCondition`] is built from.
 ///
 /// With `inline` decoding the script currently computes physical values itself.
-/// `default_can_id` is only used inline, to resolve a list's CAN id when it declares no
-/// override of its own; pass anything when `inline` is `false`.
+/// `default_can_id` is only used inline, to resolve a list's CAN id when it declares no override of its own.
+/// Pass anything when `inline` is `false`.
 pub fn resolve_terms(
     terms: &[TriggerTerm],
     inline: bool,
@@ -163,11 +166,14 @@ pub fn resolve_terms(
         })
         .collect();
 
-    let (signals, decoders) = resolve_trigger(project, daq_lists, &reads, inline, default_can_id)?;
-    if inline {
-        // `terms` still carries what the user actually asked for.
+    let (signals, decoders) = if inline {
+        let names: Vec<String> = reads.iter().map(|(name, _)| name.clone()).collect();
+        let decoders = decoders_for(project, daq_lists, &names, default_can_id)?;
         reject_scaled_raw_reads(terms, &decoders)?;
-    }
+        (inline_trigger_signals(&decoders), decoders)
+    } else {
+        (dbc_trigger_signals(project, daq_lists, &reads)?, Vec::new())
+    };
     Ok(ResolvedTrigger {
         signals,
         comparisons,

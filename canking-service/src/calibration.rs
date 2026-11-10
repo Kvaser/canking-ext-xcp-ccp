@@ -3,7 +3,6 @@
 use protocol_core::protocol::ExpectedResponse;
 
 use crate::bindings::canking::data_processor::types::LogSeverity;
-use crate::decode::PidUpdate;
 use crate::logging::log_msg;
 use crate::state::{STATE, State};
 
@@ -66,23 +65,20 @@ pub(crate) fn consume_response(data: &[u8], positive: bool) {
         return;
     }
 
-    match state.apply_first_pid(daq_index, first_pid) {
-        PidUpdate::Applied { previous } => {
-            let id = state
-                .decoder
-                .as_ref()
-                .and_then(|d| d.list_pid(daq_index))
-                .map(|(id, _)| id.to_string())
-                .unwrap_or_else(|| daq_index.to_string());
-            log_msg(
-                format!(
-                    "DAQ list {id} starts at PID 0x{first_pid:02X}, not the \
-                     configured 0x{previous:02X}; decoder re-keyed to match the ECU"
-                ),
-                LogSeverity::Information,
-            );
-        }
-        PidUpdate::Unchanged | PidUpdate::NoSuchList => {}
+    if let Some(previous) = state.apply_first_pid(daq_index, first_pid) {
+        let id = state
+            .decoder
+            .as_ref()
+            .and_then(|d| d.list_pid(daq_index))
+            .map(|(id, _)| id.to_string())
+            .unwrap_or_else(|| daq_index.to_string());
+        log_msg(
+            format!(
+                "DAQ list {id} starts at PID 0x{first_pid:02X}, not the \
+                 configured 0x{previous:02X}; decoder re-keyed to match the ECU"
+            ),
+            LogSeverity::Information,
+        );
     }
 
     // The last init command has been answered

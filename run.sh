@@ -9,7 +9,7 @@
 # Groups:
 #   lint     rustfmt, clippy (-D warnings) for the workspace and the a2l-daq component, rustdoc,
 #            eslint and prettier for canking-gui
-#   rust     cargo tests (workspace, and a2l-daq without tscript) + a2l-daq-cli release build
+#   rust     cargo tests (workspace) + a2l-daq-cli release build
 #   wasm     wasm32-wasip2 component builds (a2l-daq, daq-decoder)
 #   gui      canking-gui: npm ci (skipped locally while node_modules matches package-lock.json),
 #            jco transpile, typecheck + vite build, npm pack (.tgz)
@@ -254,10 +254,8 @@ lint_group() {
 }
 
 rust_group() {
-    step "cargo test (workspace, default features)" \
+    step "cargo test (workspace)" \
         cargo test --workspace
-    step "cargo test a2l-daq (serde, without tscript)" \
-        cargo test -p a2l-daq --no-default-features --features serde
     step "cargo build a2l-daq-cli (release)" \
         cargo build -p a2l-daq --release
 }

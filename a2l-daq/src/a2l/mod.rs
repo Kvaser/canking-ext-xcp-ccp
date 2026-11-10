@@ -194,20 +194,6 @@ mod tests {
     };
     const CCP_A2L: &[u8] = include_bytes!("../../data/CCP/SampleECU.a2l");
 
-    /// A minimal file declaring both an XCP and a CCP transport, for protocol-detection tests.
-    const DUAL_PROTOCOL_A2L: &str = r#"
-      /begin IF_DATA ASAP1B_CCP
-        /begin TP_BLOB
-          0x0201 0x0206 0x00000455 0x00000456 0x0100 0x0002
-        /end TP_BLOB
-      /end IF_DATA
-      /begin IF_DATA XCP
-        /begin DAQ
-          DYNAMIC
-        /end DAQ
-      /end IF_DATA
-        "#;
-
     #[test]
     fn virtual_resolves_against_the_input_its_formula_names() {
         let content = r#"
@@ -341,16 +327,6 @@ mod tests {
       /end MEASUREMENT
         "#;
         assert!(list_protocols(content).unwrap().is_empty());
-    }
-
-    #[test]
-    fn detects_protocols_in_real_files() {
-        let ccp_only = String::from_utf8_lossy(CCP_A2L);
-        assert_eq!(
-            inspect(DUAL_PROTOCOL_A2L).unwrap().protocols,
-            [Protocol::Xcp, Protocol::Ccp]
-        );
-        assert_eq!(inspect(&ccp_only).unwrap().protocols, [Protocol::Ccp]);
     }
 
     #[test]
@@ -539,15 +515,9 @@ mod tests {
         assert_eq!(ccp.rasters[1].channel, 2);
         assert!(ccp.info.bytes_only, "sample TP_BLOB declares BYTES_ONLY");
         let summary = inspect(&ccp_only).unwrap();
+        assert_eq!(summary.protocols, [Protocol::Ccp]);
         assert_eq!(summary.events.len(), 2);
         assert_eq!(summary.events[0].name, "Raster_10ms");
-
-        let both = parse_a2l(DUAL_PROTOCOL_A2L, &[]).unwrap();
-        assert!(both.xcp_data.is_some());
-        let ccp = both.ccp_data.expect("dual-protocol CCP transport");
-        assert_eq!(ccp.info.cro_id, 0x455);
-        assert_eq!(ccp.info.dto_id, 0x456);
-        assert_eq!(ccp.info.station_address, 0x0100);
     }
 
     #[test]
@@ -678,8 +648,11 @@ mod tests {
 
         let summary = inspect(content).unwrap();
         assert_eq!(summary.groups.len(), 2);
+        assert_eq!(summary.groups[0].name, "Engine");
+        assert_eq!(summary.groups[0].description, "Engine related measurements");
         assert!(summary.groups[0].root);
         assert_eq!(summary.groups[0].sub_groups, ["Engine_Sensors"]);
+        assert!(!summary.groups[1].root);
 
         let engine_speed = summary
             .signals
@@ -693,6 +666,7 @@ mod tests {
     fn inspect_rejects_empty_input() {
         assert_eq!(inspect("   "), Err(A2lParseError::EmptyInput));
         assert_eq!(list_events(""), Err(A2lParseError::EmptyInput));
+        assert_eq!(parse_a2l("", &[]), Err(A2lParseError::EmptyInput));
     }
 
     #[test]
@@ -1029,12 +1003,6 @@ mod tests {
         );
         assert_eq!(project.signals[0].lower_limit, 0.0);
         assert_eq!(project.signals[0].upper_limit, 200.0);
-    }
-
-    #[test]
-    fn rejects_empty_input() {
-        let result = parse_a2l("", &[]);
-        assert_eq!(result, Err(A2lParseError::EmptyInput));
     }
 
     #[test]

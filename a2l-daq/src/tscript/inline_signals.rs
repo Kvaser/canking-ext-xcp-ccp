@@ -367,20 +367,13 @@ fn scale(expr: &str, d: &SignalDecoder) -> String {
     out
 }
 
-/// Format a float for a t source literal
+/// Format a float for a t source literal. `f64`'s.
 fn t_float(v: f64) -> String {
     if v == v.trunc() && v.abs() < 1e15 {
-        return format!("{v:.1}");
+        format!("{v:.1}")
+    } else {
+        v.to_string()
     }
-    let plain = format!("{v}");
-    if !plain.contains('e') && !plain.contains('E') {
-        return plain;
-    }
-    let mut expanded = format!("{v:.17}");
-    while expanded.ends_with('0') && !expanded.ends_with(".0") {
-        expanded.pop();
-    }
-    expanded
 }
 
 // ------------------------------- Unit tests ------------------------------------------

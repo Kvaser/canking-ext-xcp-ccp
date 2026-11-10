@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 
 import { DaqList } from '../a2l-daq-wasm/interfaces/kvaser-a2l-daq-generator.js';
-import { formatCanId, parseCanId, parsePrescaler } from './util';
+import { formatHex, parseBoundedInt, parseCanId } from './util';
 
 export interface DaqListSectionProps {
   daqLists: DaqList[];
@@ -56,10 +56,6 @@ function DaqListSection({
   prescalers,
   onPrescalersChange,
 }: DaqListSectionProps) {
-  if (daqLists.length === 0) {
-    return null;
-  }
-
   const dynamicCount = daqLists.filter(l => l.canId.tag === 'dynamic').length;
 
   const setOverride = (listId: number, text: string) => {
@@ -91,7 +87,7 @@ function DaqListSection({
               const invalid = raw.trim() !== '' && parseCanId(raw) === null;
               const rawPrescaler = prescalers[String(list.id)] ?? '';
               const invalidPrescaler =
-                prescalerMax !== undefined && parsePrescaler(rawPrescaler, prescalerMax) === null;
+                prescalerMax !== undefined && parseBoundedInt(rawPrescaler, 1, 1, prescalerMax) === null;
               return (
                 <TableRow key={list.id} hover>
                   <TableCell sx={{ fontFamily: 'monospace' }}>{list.id}</TableCell>
@@ -104,7 +100,7 @@ function DaqListSection({
                     )}
                     {list.canId.tag === 'fixed' && (
                       <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                        Fixed {formatCanId(list.canId.val)}
+                        Fixed {formatHex(list.canId.val)}
                       </Typography>
                     )}
                     {list.canId.tag === 'dynamic' && (

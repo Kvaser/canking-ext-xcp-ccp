@@ -171,6 +171,19 @@ pub struct Command {
     pub optional: bool,
 }
 
+impl Command {
+    /// A mandatory command expecting a plain acknowledge.
+    pub(crate) fn ack(phase: Phase, bytes: Vec<u8>, label: String) -> Self {
+        Command {
+            phase,
+            bytes,
+            label,
+            response: ExpectedResponse::Ack,
+            optional: false,
+        }
+    }
+}
+
 /// Bytes a frame must carry to match, as `(index, value)` pairs.
 pub type BytePattern = &'static [(usize, u8)];
 
@@ -180,26 +193,6 @@ pub struct ResponseFormat {
     pub positive: BytePattern,
     pub error: BytePattern,
     pub error_code_byte: usize,
-}
-
-impl ResponseFormat {
-    pub fn is_positive(&self, data: &[u8]) -> bool {
-        matches_pattern(self.positive, data)
-    }
-
-    pub fn is_error(&self, data: &[u8]) -> bool {
-        !self.is_positive(data) && matches_pattern(self.error, data)
-    }
-
-    pub fn error_code(&self, data: &[u8]) -> u8 {
-        data.get(self.error_code_byte).copied().unwrap_or(0)
-    }
-}
-
-fn matches_pattern(pattern: BytePattern, data: &[u8]) -> bool {
-    pattern
-        .iter()
-        .all(|(index, value)| data.get(*index) == Some(value))
 }
 
 /// What an incoming frame on the slave CAN ID means for a pending command.
@@ -240,11 +233,12 @@ pub fn build_stop_commands(
 /// Classify a frame received on the slave CAN ID.
 pub fn classify_response(protocol: Protocol, data: &[u8]) -> ResponseType {
     let format = protocol.response_format();
-    if format.is_positive(data) {
+    let matches = |pattern: BytePattern| pattern.iter().all(|(i, v)| data.get(*i) == Some(v));
+    if matches(format.positive) {
         ResponseType::Positive
-    } else if format.is_error(data) {
+    } else if matches(format.error) {
         ResponseType::Error {
-            code: format.error_code(data),
+            code: data.get(format.error_code_byte).copied().unwrap_or(0),
         }
     } else {
         ResponseType::Unrelated
@@ -274,29 +268,146 @@ pub(crate) fn dword(v: u32, big_endian: bool) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{
+        CanIdSource, CcpData, EventEntry, EventInfo, Odt, OdtEntry, ParsedSignal, XcpData,
+    };
 
-    #[test]
-    fn xcp_dispatch_matches_direct_builder() {
-        let project = A2lProject::default();
-        let daq: Vec<DaqList> = Vec::new();
-
-        let init = build_init_commands(Protocol::Xcp, &project, &daq);
-        assert_eq!(init, crate::xcp::build_init_commands(&project, &daq));
-
-        let stop = build_stop_commands(Protocol::Xcp, &project, &daq);
-        assert_eq!(stop, crate::xcp::build_stop_commands(&project, &daq));
+    /// A `protocol` project with event "E" on channel 3, and one list sampling `A` (address extension 3) and `B` on it.
+    fn fixture(protocol: Protocol) -> (A2lProject, Vec<DaqList>) {
+        let events = vec![EventEntry {
+            channel: 3,
+            name: "E".into(),
+            ..Default::default()
+        }];
+        let mut project = A2lProject {
+            signals: vec![ParsedSignal {
+                name: "A".into(),
+                address_extension: 3,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        match protocol {
+            Protocol::Xcp => {
+                project.xcp_data = Some(XcpData {
+                    event_info: EventInfo { events },
+                    ..Default::default()
+                })
+            }
+            Protocol::Ccp => {
+                project.ccp_data = Some(CcpData {
+                    rasters: events,
+                    ..Default::default()
+                })
+            }
+        }
+        let entry = |name: &str, ecu_address| OdtEntry {
+            names: vec![name.into()],
+            ecu_address,
+            size: 4,
+        };
+        let daq = vec![DaqList {
+            prescaler: 1,
+            id: 0,
+            first_pid: 0,
+            odts: vec![Odt {
+                entries: vec![entry("A", 0x1000), entry("B", 0x2000)],
+            }],
+            event: Some("E".into()),
+            can_id: CanIdSource::Default,
+        }];
+        (project, daq)
     }
 
     #[test]
-    fn ccp_dispatch_matches_direct_builder() {
-        let project = A2lProject::default();
-        let daq: Vec<DaqList> = Vec::new();
+    fn init_phases_appear_in_order_and_stop_ends_with_disconnect() {
+        for protocol in Protocol::ALL {
+            let (project, daq) = fixture(protocol);
+            let cmds = build_init_commands(protocol, &project, &daq);
+            let order = [
+                Phase::Connect,
+                Phase::Prepare,
+                Phase::WriteEntries,
+                Phase::SetMode,
+                Phase::Start,
+            ];
+            let mut last = 0;
+            for c in &cmds {
+                let pos = order.iter().position(|p| *p == c.phase).unwrap();
+                assert!(
+                    pos >= last,
+                    "{protocol:?}: phase went backwards at {}",
+                    c.label
+                );
+                last = pos;
+            }
+            for phase in order {
+                assert!(
+                    cmds.iter().any(|c| c.phase == phase),
+                    "{protocol:?}: missing {phase:?}"
+                );
+            }
 
-        let init = build_init_commands(Protocol::Ccp, &project, &daq);
-        assert_eq!(init, crate::ccp::build_init_commands(&project, &daq));
+            let stop = build_stop_commands(protocol, &project, &daq);
+            assert!(stop.iter().all(|c| c.phase == Phase::Stop), "{protocol:?}");
+            let disconnect = match protocol {
+                Protocol::Xcp => 0xFE,
+                Protocol::Ccp => 0x07,
+            };
+            assert_eq!(stop.last().unwrap().bytes[0], disconnect, "{protocol:?}");
+        }
+    }
 
-        let stop = build_stop_commands(Protocol::Ccp, &project, &daq);
-        assert_eq!(stop, crate::ccp::build_stop_commands(&project, &daq));
+    #[test]
+    fn get_seed_and_unlock_are_optional_connect_phase_commands() {
+        for protocol in Protocol::ALL {
+            let (project, daq) = fixture(protocol);
+            let cmds = build_init_commands(protocol, &project, &daq);
+            // resource=DAQ, then a 6-byte zero key; CCP's are the third and fourth 8-byte CROs `[cmd, ctr, ...]`.
+            let (seed, unlock): (&[u8], &[u8]) = match protocol {
+                Protocol::Xcp => (&[0xF8, 0x00, 0x04], &[0xF7, 0x06, 0, 0, 0, 0, 0, 0]),
+                Protocol::Ccp => (
+                    &[0x12, 2, 0x02, 0, 0, 0, 0, 0],
+                    &[0x13, 3, 0, 0, 0, 0, 0, 0],
+                ),
+            };
+            for (label, bytes) in [("GET_SEED", seed), ("UNLOCK", unlock)] {
+                let c = cmds.iter().find(|c| c.label.starts_with(label)).unwrap();
+                assert_eq!(c.phase, Phase::Connect, "{protocol:?} {label}");
+                assert_eq!(c.bytes, bytes, "{protocol:?} {label}");
+                assert!(
+                    c.optional,
+                    "{protocol:?}: {label} must not abort init if unsupported"
+                );
+            }
+            assert_eq!(
+                cmds.iter().filter(|c| c.optional).count(),
+                2,
+                "{protocol:?}: every other command stays mandatory"
+            );
+        }
+    }
+
+    #[test]
+    fn write_daq_carries_the_signal_address_extension() {
+        for protocol in Protocol::ALL {
+            let (project, daq) = fixture(protocol);
+            let cmds = build_init_commands(protocol, &project, &daq);
+            let writes: Vec<&[u8]> = cmds
+                .iter()
+                .filter(|c| c.label.starts_with("WRITE_DAQ"))
+                .map(|c| c.bytes.as_slice())
+                .collect();
+            assert_eq!(
+                writes[0][3], 3,
+                "{protocol:?} A: extension from its MEASUREMENT"
+            );
+            assert_eq!(
+                writes.last().unwrap()[3],
+                0,
+                "{protocol:?} B: undeclared means 0"
+            );
+        }
     }
 
     #[test]

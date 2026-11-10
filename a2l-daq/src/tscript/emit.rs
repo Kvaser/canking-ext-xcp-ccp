@@ -4,16 +4,12 @@ use super::inline_signals;
 use super::trigger::{TriggerSignal, condition_expression, latch_block, latch_variables};
 use super::{DaqInit, MessageRef, SignalHook, TScriptConfig};
 use protocol_core::protocol::BytePattern;
+use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 
 const DAQ_INIT_MAX_RETRIES: u32 = 10;
 /// Pause before the DAQ init starts over from its first command.
 const DAQ_INIT_RESTART_MS: u32 = 5000;
-
-/// Per-channel identifier suffix
-fn channel_suffix(i: usize) -> String {
-    if i == 0 { String::new() } else { i.to_string() }
-}
 
 /// Generate the `.t` script content from a config.
 pub fn generate_tscript(config: &TScriptConfig) -> String {
@@ -31,7 +27,10 @@ pub fn generate_tscript(config: &TScriptConfig) -> String {
     }
     out.push_str(&end_daq_function(config));
     out.push_str(&on_start_block(config));
-    out.push_str(&signal_hook_block(config));
+    out.push_str("/*\n    Signal Hook\n*/\n\n");
+    for hook in &config.signals {
+        out.push_str(&signal_hook_block(config, hook));
+    }
     out.push_str(&stop_frame_blocks(config));
     if config.timer_ms.is_some() {
         out.push_str(&log_timer_block(config));
@@ -133,32 +132,21 @@ fn behaviour_lines(config: &TScriptConfig) -> String {
 fn variables_block(config: &TScriptConfig) -> String {
     let mut out = String::new();
     out.push_str("variables{\n");
-    for (i, ch) in config.channels.iter().enumerate() {
-        let suffix = channel_suffix(i);
-        let _ = writeln!(out, "    const int can_channel{} = {};", suffix, ch.index);
-        match ch.data_bitrate {
-            Some(data_bitrate) => {
-                let _ = writeln!(
-                    out,
-                    "    const int bitrate{} = {};",
-                    suffix,
-                    fd_bitrate_token(ch.bitrate)
-                );
-                let _ = writeln!(
-                    out,
-                    "    const int data_bitrate{} = {};",
-                    suffix,
-                    fd_bitrate_token(data_bitrate)
-                );
-            }
-            None => {
-                let _ = writeln!(out, "    const int bitrate{} = {};", suffix, ch.bitrate);
-            }
+    let ch = &config.channel;
+    let _ = writeln!(out, "    const int can_channel = {};", ch.index);
+    match ch.data_bitrate {
+        Some(data_bitrate) => {
+            let bitrate = fd_bitrate_token(ch.bitrate);
+            let data_bitrate = fd_bitrate_token(data_bitrate);
+            let _ = writeln!(out, "    const int bitrate = {bitrate};");
+            let _ = writeln!(out, "    const int data_bitrate = {data_bitrate};");
+        }
+        None => {
+            let _ = writeln!(out, "    const int bitrate = {};", ch.bitrate);
         }
     }
     if let Some(init) = &config.daq_init {
         let _ = writeln!(out, "    const int master_id = 0x{:X};", init.master_id);
-        let _ = writeln!(out, "    const int slave_id = 0x{:X};", init.slave_id);
         let _ = writeln!(out, "    const int INIT_STATES = {};", init.commands.len());
     }
     let _ = writeln!(out, "    int logging = 0;");
@@ -184,38 +172,34 @@ fn variables_block(config: &TScriptConfig) -> String {
         }
     }
     out.push_str(&inline_signals::helper_typedef(&config.decoders));
-    out.push_str(&latch_variables(&all_trigger_signals(config)));
+    out.push_str(&latch_variables(&trigger_signals(&config.signals)));
     out.push_str("}\n\n");
     out
 }
 
-/// Every distinct trigger signal across all of a config's hooks.
-fn all_trigger_signals(config: &TScriptConfig) -> Vec<TriggerSignal> {
-    let mut signals: Vec<TriggerSignal> = Vec::new();
-    for hook in &config.signals {
-        for s in hook_signals(hook) {
-            if !signals.iter().any(|existing| existing.ident == s.ident) {
-                signals.push(s);
-            }
-        }
-    }
-    signals
+/// Every distinct signal the triggers and stop conditions of `hooks` read, first occurrence first.
+fn trigger_signals<'a>(hooks: impl IntoIterator<Item = &'a SignalHook>) -> Vec<TriggerSignal> {
+    let mut seen = HashSet::new();
+    hooks
+        .into_iter()
+        .flat_map(|hook| hook.trigger.iter().chain(&hook.stop))
+        .flat_map(|condition| &condition.signals)
+        .filter(|s| seen.insert(s.ident.as_str()))
+        .cloned()
+        .collect()
 }
 
-/// The signals one hook depend on
-fn hook_signals(hook: &SignalHook) -> Vec<TriggerSignal> {
-    let mut signals: Vec<TriggerSignal> = Vec::new();
-    for s in hook
-        .trigger
-        .iter()
-        .chain(&hook.stop)
-        .flat_map(|c| &c.signals)
-    {
-        if !signals.iter().any(|existing| existing.ident == s.ident) {
-            signals.push(s.clone());
-        }
-    }
-    signals
+/// Stop the logger if it is running.
+const STOP_LOGGER: &str = concat!(
+    "    if (loggerStatus() == LOGGER_STATE_LOGGING) {\n",
+    "        printf(\"Stopping logger...\\n\");\n",
+    "        loggerStop();\n",
+    "    }\n",
+);
+
+/// (Re)send the pending init command and wait for its response.
+fn send_pending_command(indent: &str) -> String {
+    format!("{indent}sendDaqCommand(init_state, master_id);\n{indent}timerStart(daqTimeout);\n")
 }
 
 /// Stop DAQ and logging status. Called after the last capture, by the stop condition or stop frame, and when the script stops.
@@ -223,10 +207,7 @@ fn end_daq_function(config: &TScriptConfig) -> String {
     let mut out = String::from("void endDaq() {\n");
     out.push_str("    if (daq_ended == 1) { return; }\n");
     out.push_str("    daq_ended = 1;\n");
-    out.push_str("    if (loggerStatus() == LOGGER_STATE_LOGGING) {\n");
-    out.push_str("        printf(\"Stopping logger...\\n\");\n");
-    out.push_str("        loggerStop();\n");
-    out.push_str("    }\n");
+    out.push_str(STOP_LOGGER);
     if config.timer_ms.is_some() {
         out.push_str("    timerCancel(logTimer);\n");
     }
@@ -256,7 +237,7 @@ fn stop_frame_blocks(config: &TScriptConfig) -> String {
         extended: can_id > 0x7FF,
     }
     .hook_selector();
-    let kinds: &[&str] = if config.can_fd {
+    let kinds: &[&str] = if config.can_fd() {
         &["CanMessage", "CanMessageFd"]
     } else {
         &["CanMessage"]
@@ -276,7 +257,7 @@ fn daq_functions_block(config: &TScriptConfig, init: &DaqInit) -> String {
     let mut out = String::new();
     out.push_str("void send(int id, const byte data[]) {\n");
 
-    if config.can_fd {
+    if config.can_fd() {
         out.push_str("    CanMessageFd msg;\n");
         out.push_str("    msg.flags = canFDMSG_FDF | canFDMSG_BRS;\n");
     } else {
@@ -295,8 +276,7 @@ fn daq_functions_block(config: &TScriptConfig, init: &DaqInit) -> String {
     for (i, cmd) in init.commands.iter().enumerate() {
         let _ = writeln!(
             out,
-            "    case {}:  /* [{}] {} */",
-            i,
+            "    case {i}:  /* [{}] {} */",
             cmd.phase.tag(),
             cmd.label
         );
@@ -334,14 +314,13 @@ fn daq_functions_block(config: &TScriptConfig, init: &DaqInit) -> String {
         for (i, cmd) in init.stop_commands.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "    byte stopData{}[{}] = {{{}}};  /* [{}] {} */",
-                i,
+                "    byte stopData{i}[{}] = {{{}}};  /* [{}] {} */",
                 cmd.bytes.len(),
                 byte_literals(&cmd.bytes),
                 cmd.phase.tag(),
                 cmd.label
             );
-            let _ = writeln!(out, "    send(id, stopData{});", i);
+            let _ = writeln!(out, "    send(id, stopData{i});");
         }
         out.push_str("}\n\n");
     }
@@ -367,44 +346,20 @@ fn on_start_block(config: &TScriptConfig) -> String {
     let mut out = String::new();
     out.push_str("on start {\n");
     out.push_str("    printf(\"Starting script...\\n\");\n\n");
-    for (i, ch) in config.channels.iter().enumerate() {
-        let suffix = channel_suffix(i);
-        let _ = writeln!(out, "    canBusOff(can_channel{});", suffix);
-        if ch.data_bitrate.is_some() {
-            // Specific bus params more important for CAN FD
-            let _ = writeln!(
-                out,
-                "    canSetBusParams(can_channel{0}, bitrate{0}, 0, 0, 0, 0);",
-                suffix
-            );
-            let _ = writeln!(
-                out,
-                "    canSetBusParamsFd(can_channel{0}, data_bitrate{0}, 0, 0, 0);",
-                suffix
-            );
-            let _ = writeln!(
-                out,
-                "    canSetCommunicationMode(can_channel{}, canMODE_CAN_FD);",
-                suffix
-            );
-        } else {
-            let _ = writeln!(
-                out,
-                "    canSetBitrate(can_channel{0}, bitrate{0});",
-                suffix
-            );
-        }
-        let _ = writeln!(
-            out,
-            "    canSetBusOutputControl(can_channel{}, canDRIVER_NORMAL);",
-            suffix
-        );
-        let _ = writeln!(out, "    canBusOn(can_channel{});", suffix);
+    out.push_str("    canBusOff(can_channel);\n");
+    if config.can_fd() {
+        out.push_str("    canSetBusParams(can_channel, bitrate, 0, 0, 0, 0);\n");
+        out.push_str("    canSetBusParamsFd(can_channel, data_bitrate, 0, 0, 0);\n");
+        out.push_str("    canSetCommunicationMode(can_channel, canMODE_CAN_FD);\n");
+    } else {
+        out.push_str("    canSetBitrate(can_channel, bitrate);\n");
     }
+    out.push_str("    canSetBusOutputControl(can_channel, canDRIVER_NORMAL);\n");
+    out.push_str("    canBusOn(can_channel);\n");
     out.push('\n');
     let _ = writeln!(out, "    loggerSetPretrigger({});", config.pretrigger_ms);
     if let Some(ms) = config.timer_ms {
-        let _ = writeln!(out, "    logTimer.timeout = {};", ms);
+        let _ = writeln!(out, "    logTimer.timeout = {ms};");
     }
 
     if let Some(init) = &config.daq_init {
@@ -413,19 +368,9 @@ fn on_start_block(config: &TScriptConfig) -> String {
         if let Some(ms) = config.daq_watchdog_ms {
             let _ = writeln!(out, "    daqWatchdog.timeout = {ms};");
         }
-        out.push_str("    sendDaqCommand(init_state, master_id);\n");
-        out.push_str("    timerStart(daqTimeout);\n");
+        out.push_str(&send_pending_command("    "));
     }
     out.push_str("}\n\n");
-    out
-}
-
-/// The `on CanMessage(Fd)<*>` hook(s)
-fn signal_hook_block(config: &TScriptConfig) -> String {
-    let mut out = String::from("/*\n    Signal Hook\n*/\n\n");
-    for hook in &config.signals {
-        out.push_str(&one_signal_hook_block(config, hook));
-    }
     out
 }
 
@@ -435,8 +380,7 @@ fn advance_state_lines(indent: &str, protocol_name: &str, watchdog: bool) -> Str
     let _ = writeln!(out, "{indent}init_state++;");
     let _ = writeln!(out, "{indent}count = 0;");
     let _ = writeln!(out, "{indent}if (init_state < INIT_STATES) {{");
-    let _ = writeln!(out, "{indent}    sendDaqCommand(init_state, master_id);");
-    let _ = writeln!(out, "{indent}    timerStart(daqTimeout);");
+    out.push_str(&send_pending_command(&format!("{indent}    ")));
     let _ = writeln!(out, "{indent}}} else {{");
     let _ = writeln!(
         out,
@@ -464,21 +408,16 @@ fn fatal_error_lines(indent: &str, protocol_name: &str, error_code_byte: usize) 
 const NO_PENDING_COMMAND: &str = "if (init_state < 0 || init_state >= INIT_STATES) { return; }";
 
 /// One `on CanMessage(Fd)<*>` block
-fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
+fn signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
     let mut out = String::new();
     let has_init = config.daq_init.is_some() && hook.handles_responses;
-    let msg_kind = if config.can_fd {
+    let msg_kind = if config.can_fd() {
         "CanMessageFd"
     } else {
         "CanMessage"
     };
-    let _ = writeln!(
-        out,
-        "on {}<*> {} {{",
-        msg_kind,
-        hook.message.hook_selector()
-    );
-    // In DBC mode only the default DAQ id is hooked, so lists on their own CAN id don't feed the watchdog.
+    let _ = writeln!(out, "on {msg_kind}<*> {} {{", hook.message.hook_selector());
+    // Every DAQ message has a hook, so any DAQ frame feeds the watchdog.
     let watchdog = config.daq_init.is_some() && config.daq_watchdog_ms.is_some();
     if watchdog {
         out.push_str("    daq_seen = 1;\n");
@@ -524,7 +463,7 @@ fn one_signal_hook_block(config: &TScriptConfig, hook: &SignalHook) -> String {
             out.push_str("    else {\n");
         }
 
-        out.push_str(&latch_block(&hook_signals(hook), indent));
+        out.push_str(&latch_block(&trigger_signals([hook]), indent));
         let _ = writeln!(out, "{indent}if (daq_ended == 1) {{ return; }}");
         if let Some(stop) = &hook.stop {
             let _ = writeln!(out, "{indent}if ({}) {{", condition_expression(stop));
@@ -579,10 +518,7 @@ fn log_timer_block(config: &TScriptConfig) -> String {
     let mut out = String::new();
     out.push_str("on Timer logTimer {\n");
     out.push_str("    printf(\"Log timer expired\\n\");\n");
-    out.push_str("    if (loggerStatus() == LOGGER_STATE_LOGGING) {\n");
-    out.push_str("        printf(\"Stopping logger...\\n\");\n");
-    out.push_str("        loggerStop();\n");
-    out.push_str("    }\n");
+    out.push_str(STOP_LOGGER);
     out.push_str("    logging = 0;\n");
     if config.max_captures.is_some() {
         out.push_str("    if (captures >= MAX_CAPTURES) {\n");
@@ -610,15 +546,13 @@ fn daq_timer_blocks(config: &TScriptConfig) -> String {
     out.push_str("        return;\n");
     out.push_str("    }\n");
     out.push_str("    printf(\"DAQ timeout at state %d, retrying...\\n\", init_state);\n");
-    out.push_str("    sendDaqCommand(init_state, master_id);\n");
-    out.push_str("    timerStart(daqTimeout);\n");
+    out.push_str(&send_pending_command("    "));
     out.push_str("}\n\n");
 
     out.push_str("on Timer initRestart {\n");
     out.push_str("    printf(\"Restarting the DAQ init\\n\");\n");
     out.push_str("    init_state = 0;\n");
-    out.push_str("    sendDaqCommand(init_state, master_id);\n");
-    out.push_str("    timerStart(daqTimeout);\n");
+    out.push_str(&send_pending_command("    "));
     out.push_str("}\n\n");
 
     if let Some(ms) = config.daq_watchdog_ms {
@@ -658,19 +592,16 @@ fn stop_and_exception_block() -> String {
 fn byte_literals(bytes: &[u8]) -> String {
     bytes
         .iter()
-        .map(|b| format!("0x{:02X}", b))
+        .map(|b| format!("0x{b:02X}"))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 /// Render a [`BytePattern`] as a t-script condition over the received frame.
 fn frame_condition(pattern: BytePattern) -> String {
-    if pattern.is_empty() {
-        return String::from("1");
-    }
     pattern
         .iter()
-        .map(|(index, value)| format!("this.data[{}] == 0x{:02X}", index, value))
+        .map(|(index, value)| format!("this.data[{index}] == 0x{value:02X}"))
         .collect::<Vec<_>>()
         .join(" && ")
 }
@@ -704,18 +635,11 @@ mod tests {
     #[test]
     fn generates_basic_tscript() {
         let mut config = dbc_config();
-        config.channels = vec![
-            CanChannel {
-                index: 0,
-                bitrate: 1_000_000,
-                data_bitrate: None,
-            },
-            CanChannel {
-                index: 1,
-                bitrate: 500_000,
-                data_bitrate: None,
-            },
-        ];
+        config.channel = CanChannel {
+            index: 0,
+            bitrate: 1_000_000,
+            data_bitrate: None,
+        };
         config.pretrigger_ms = 200;
         config.signals[0].message = MessageRef::Dbc("PowertrainStatus".into());
         config.signals[0].trigger = Some(TriggerCondition {
@@ -727,8 +651,6 @@ mod tests {
         let tscript = generate_tscript(&config);
         assert!(tscript.contains("const int can_channel = 0;"));
         assert!(tscript.contains("const int bitrate = 1000000;"));
-        assert!(tscript.contains("const int can_channel1 = 1;"));
-        assert!(tscript.contains("const int bitrate1 = 500000;"));
         assert!(tscript.contains("loggerSetPretrigger(200);"));
         assert!(tscript.contains("on CanMessage<*> PowertrainStatus {"));
         assert!(tscript.contains("val_EngineSpeed = this.EngineSpeed.Phys;"));
@@ -757,15 +679,14 @@ mod tests {
             vec![cmd(vec![0xFF, 0x00], "CONNECT")],
             vec![stop_cmd(vec![0xFE], "DISCONNECT")],
         );
-        config.channels = vec![CanChannel {
+        config.channel = CanChannel {
             index: 0,
             bitrate: 1_000_000,
             data_bitrate: Some(2_000_000),
-        }];
+        };
         config.pretrigger_ms = 200;
         config.signals[0].message = MessageRef::Dbc("Test".into());
         config.timer_ms = None;
-        config.can_fd = true;
         let t = generate_tscript(&config);
         assert!(t.contains("const int bitrate = canFD_BITRATE_1M_80P;"));
         assert!(t.contains("const int data_bitrate = canFD_BITRATE_2M_80P;"));
@@ -818,7 +739,6 @@ mod tests {
         config.daq_init = Some(DaqInit {
             protocol: Protocol::Xcp,
             master_id: 0x51,
-            slave_id: 0x52,
             timeout_ms: 200,
             commands: vec![
                 cmd(vec![0xFF, 0x00], "CONNECT"),
@@ -832,7 +752,7 @@ mod tests {
         });
         let t = generate_tscript(&config);
         assert!(t.contains("const int master_id = 0x51;"));
-        assert!(t.contains("const int slave_id = 0x52;"));
+        assert!(!t.contains("slave_id"), "the script never uses it");
         assert!(t.contains("const int INIT_STATES = 3;"));
         assert!(t.contains("Timer daqTimeout;"));
         assert!(t.contains("void send(int id, const byte data[]) {"));
@@ -884,17 +804,6 @@ mod tests {
         assert!(
             !ccp.contains("0xFE"),
             "no XCP frame bytes in a CCP script:\n{ccp}"
-        );
-
-        let xcp = generate_tscript(&init_config(
-            Protocol::Xcp,
-            vec![cmd(vec![0xFF, 0x00], "CONNECT")],
-            vec![stop_cmd(vec![0xFE], "DISCONNECT")],
-        ));
-        assert!(xcp.contains("if (this.data[0] == 0xFF) {"), "got:\n{xcp}");
-        assert!(
-            xcp.contains("} else if (this.data[0] == 0xFE) {"),
-            "got:\n{xcp}"
         );
     }
 
@@ -967,10 +876,6 @@ mod tests {
             vec![],
         ));
         assert!(!t.contains("sendDaqStop"), "got:\n{t}");
-        assert!(
-            t.contains("} else if (this.data[0] == 0xFE) {"),
-            "got:\n{t}"
-        );
     }
 
     #[test]
@@ -1155,7 +1060,6 @@ mod tests {
         config.daq_init = Some(DaqInit {
             protocol: Protocol::Xcp,
             master_id: 0x455,
-            slave_id: 0x456,
             timeout_ms: 1000,
             commands: vec![cmd(vec![0xFF, 0x00], "CONNECT")],
             stop_commands: vec![stop_cmd(vec![0xFE], "DISCONNECT")],
@@ -1205,8 +1109,7 @@ mod tests {
         let mut config = dbc_config();
         config.signals = signals;
         config.daq_init = Some(
-            build_daq_init(Protocol::Xcp, &project, &daq_lists, 1000)
-                .expect("master/slave ids present"),
+            build_daq_init(Protocol::Xcp, &project, &daq_lists).expect("master/slave ids present"),
         );
         config.decoders = resolved.decoders;
         let t = generate_tscript(&config);
@@ -1437,7 +1340,7 @@ mod tests {
             "got:\n{classic}"
         );
 
-        config.can_fd = true;
+        config.channel.data_bitrate = Some(2_000_000);
         config.stop_can_id = Some(0x18FF_0001);
         let fd = generate_tscript(&config);
         assert!(

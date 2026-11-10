@@ -56,28 +56,21 @@ pub use pipeline::{
     dropped_signals,
 };
 pub use traceability::traceability_lines;
-pub use xcp::{XcpCommand, XcpPhase, XcpResponse, build_init_commands};
-
-// Data processor configuration (shared JSON contract, lives in protocol-core)
-#[cfg(feature = "serde")]
-pub use protocol_core::config::{self, Config};
+pub use xcp::build_init_commands;
 
 // The wasm component.
 #[cfg(feature = "component")]
 mod component;
 
 // T-script generation
-#[cfg(feature = "tscript")]
 pub mod tscript;
 
-#[cfg(feature = "tscript")]
 pub use tscript::{
     Accessor, BusDefaults, CanChannel, CompareOp, Comparison, DEFAULT_BITRATE,
-    DEFAULT_FD_DATA_BITRATE, DEFAULT_INIT_TIMEOUT_MS, DaqInit, DecoderType, MessageRef,
-    ResolvedTrigger, SignalDecoder, SignalHook, TScriptConfig, TriggerAction, TriggerCondition,
-    TriggerError, TriggerExprError, TriggerParts, TriggerSignal, TriggerTerm, build_daq_init,
-    build_trigger, bus_defaults, dbc_trigger_signals, decoder_functions, decoders_for,
-    expand_signal_indices, generate_tscript, helper_typedef, inline_trigger_signals,
-    merge_decoders, parse_terms, resolve_signal_hooks, resolve_terms, resolve_trigger,
-    stop_can_id_conflict,
+    DEFAULT_FD_DATA_BITRATE, DaqInit, DecoderType, MessageRef, ResolvedTrigger, SignalDecoder,
+    SignalHook, TScriptConfig, TriggerAction, TriggerCondition, TriggerError, TriggerExprError,
+    TriggerSignal, TriggerTerm, build_daq_init, build_trigger, bus_defaults, dbc_signal_hooks,
+    dbc_trigger_signals, decoder_functions, decoders_for, expand_signal_indices, generate_tscript,
+    helper_typedef, inline_trigger_signals, merge_decoders, parse_terms, resolve_signal_hooks,
+    resolve_terms, stop_can_id_conflict,
 };

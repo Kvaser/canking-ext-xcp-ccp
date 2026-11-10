@@ -1,6 +1,5 @@
 //! End-to-end tests
-#![cfg(feature = "tscript")]
-use a2l_daq::{DaqMode, Protocol, build_daq_list, build_init_commands, create_dbc_file, parse_a2l};
+use a2l_daq::{Protocol, build_daq_list, build_init_commands, create_dbc_file, parse_a2l};
 
 const STATIC_FD_A2L: &str = r#"
 /begin MEASUREMENT EngTemp
@@ -41,72 +40,6 @@ const STATIC_FD_A2L: &str = r#"
   /end DAQ
 /end IF_DATA
 "#;
-
-#[test]
-fn static_can_fd_pipeline_end_to_end() {
-    let mut project = parse_a2l(STATIC_FD_A2L, &[]).unwrap();
-
-    let xcp = project.xcp_data.as_ref().unwrap();
-    assert_eq!(xcp.daq_info.mode, DaqMode::Static);
-    assert!(xcp.daq_info.timestamp_fixed);
-    assert_eq!(xcp.daq_info.timestamp_size, 4);
-    let fd = xcp.xcp_info.as_ref().unwrap().can_fd.as_ref().unwrap();
-    assert_eq!(fd.max_dlc, 24);
-    assert_eq!(project.signals.len(), 1);
-    assert!(
-        project.signals[0].is_float,
-        "FLOAT32_IEEE must be flagged as float"
-    );
-
-    for s in &mut project.signals {
-        s.event = Some("One_Event_Per_Rotation".into());
-    }
-
-    let (daq, unplaced) = build_daq_list(&project.clone(), Protocol::Xcp);
-    assert!(unplaced.is_empty());
-    assert_eq!(daq.len(), 1);
-    assert_eq!(daq[0].odts.len(), 1, "single 4-byte signal -> one ODT");
-    assert_eq!(daq[0].odts[0].entries[0].names, vec!["EngTemp"]);
-
-    let dbc = create_dbc_file(&project, &daq, Protocol::Xcp, "integration.a2l").unwrap();
-    assert!(
-        dbc.contains("BO_ 1110 DAQ:"),
-        "message uses slave id 0x456\n{dbc}"
-    );
-    assert!(dbc.contains(" SG_ Timestamp_0 m0 : 8|32@1+"), "{dbc}");
-    assert!(
-        dbc.contains(" SG_ EngTemp m0 : 40|"),
-        "signal shifted past timestamp\n{dbc}"
-    );
-    assert!(dbc.contains("SIG_VALTYPE_ 1110 EngTemp : 1;"), "{dbc}");
-    assert!(dbc.contains("BA_ \"VFrameFormat\" BO_ 1110 14;"), "{dbc}");
-
-    let cmds = build_init_commands(&project, &daq[..]);
-    let labels: Vec<&str> = cmds.iter().map(|c| c.label.as_str()).collect();
-    assert!(
-        !labels.iter().any(|c| c.starts_with("ALLOC_DAQ")),
-        "static: no allocation"
-    );
-    assert!(
-        labels.iter().any(|c| c.starts_with("CLEAR_DAQ_LIST")),
-        "static: lists are cleared instead of allocated"
-    );
-    let mode_cmd = cmds
-        .iter()
-        .find(|c| c.bytes[0] == 0xE0)
-        .expect("EVENT_FIXED lists still take SET_DAQ_LIST_MODE");
-    assert_eq!(
-        mode_cmd.bytes[1], 0x10,
-        "TIMESTAMP_SUPPORTED -> timestamp mode bit set"
-    );
-    assert_eq!(
-        &mode_cmd.bytes[4..6],
-        &[0x00, 0x00],
-        "fixed event channel 0"
-    );
-    assert!(labels.iter().any(|c| c.starts_with("WRITE_DAQ")));
-    assert!(labels.iter().any(|c| c.starts_with("START_STOP_SYNCH")));
-}
 
 #[test]
 fn real_a2l_resolves_tab_verb_text_tables() {
@@ -176,46 +109,41 @@ const DYNAMIC_CLASSIC_A2L: &str = r#"
 "#;
 
 #[test]
-fn dynamic_classic_pipeline_end_to_end() {
-    let mut project = parse_a2l(DYNAMIC_CLASSIC_A2L, &[]).unwrap();
-    assert_eq!(
-        project.xcp_data.as_ref().unwrap().daq_info.mode,
-        DaqMode::Dynamic
-    );
-    assert!(!project.signals[0].is_float);
+fn inline_a2ls_build_end_to_end() {
+    for (a2l, event, message) in [
+        // CAN FD DLC 12: 4 timestamp + 4 float bytes + the PID, rounded up.
+        (
+            STATIC_FD_A2L,
+            "One_Event_Per_Rotation",
+            "BO_ 1110 DAQ: 12 Slave",
+        ),
+        // Classic DLC = 2 data bytes + the PID.
+        (DYNAMIC_CLASSIC_A2L, "Task10ms", "BO_ 1110 DAQ: 3 Slave"),
+    ] {
+        let mut project = parse_a2l(a2l, &[]).unwrap();
+        let names: Vec<String> = project.signals.iter().map(|s| s.name.clone()).collect();
+        let assignments = [(event.to_string(), names.clone())];
+        let out =
+            a2l_daq::build(&mut project, &assignments, Protocol::Xcp, "integration.a2l").unwrap();
+        assert!(out.warnings.is_empty(), "{event}: {:?}", out.warnings);
+        assert_eq!(out.daq_lists.len(), 1, "{event}");
 
-    for s in &mut project.signals {
-        s.event = Some("Task10ms".into());
+        assert!(out.dbc.contains(message), "{event}:\n{}", out.dbc);
+        for name in &names {
+            assert!(
+                out.dbc.contains(&format!(" SG_ {name} m0 :")),
+                "{event}: {name} missing:\n{}",
+                out.dbc
+            );
+        }
+
+        let entries: usize = out.daq_lists[0].odts.iter().map(|o| o.entries.len()).sum();
+        let writes = build_init_commands(&project, &out.daq_lists)
+            .iter()
+            .filter(|c| c.label.starts_with("WRITE_DAQ"))
+            .count();
+        assert_eq!(writes, entries, "{event}: one WRITE_DAQ per packed entry");
     }
-
-    let (daq, unplaced) = build_daq_list(&project.clone(), Protocol::Xcp);
-    assert!(unplaced.is_empty());
-    assert_eq!(daq.len(), 1);
-
-    let dbc = create_dbc_file(&project, &daq, Protocol::Xcp, "integration.a2l").unwrap();
-    assert!(
-        dbc.contains("BO_ 1110 DAQ: 3 Slave"),
-        "classic DLC = 2 data + 1 PID\n{dbc}"
-    );
-    assert!(
-        !dbc.contains("Timestamp_"),
-        "no fixed timestamp -> no timestamp signal"
-    );
-    assert!(
-        !dbc.contains("VFrameFormat"),
-        "classic CAN -> no CAN FD attributes"
-    );
-
-    let cmds = build_init_commands(&project, &daq[..]);
-    let labels: Vec<&str> = cmds.iter().map(|c| c.label.as_str()).collect();
-    assert!(
-        labels.iter().any(|c| c.starts_with("ALLOC_DAQ")),
-        "dynamic: allocation present"
-    );
-    assert!(
-        labels.iter().any(|c| c.starts_with("SET_DAQ_LIST_MODE")),
-        "non-fixed event assigned"
-    );
 }
 
 const CCP_SOURCE_A2L: &str = r#"

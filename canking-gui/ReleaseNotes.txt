@@ -16,6 +16,7 @@ Requires Kvaser CanKing 7.6 or later.
 - t-script: added a stop condition and a stop frame CAN id that end logging and DAQ for good; stopping the script stops DAQ too
 - XCP commands in generated t-scripts are padded to 8 bytes, or to MAX_DLC on CAN FD, when the A2L sets MAX_DLC_REQUIRED; CCP commands are always 8 bytes
 - Fixed a timed t-script capturing only once, because stopping the logger also stopped DAQ on the ECU
+- Fixed t-scripts that read signals through the DBC when the DAQ lists use more than one CAN id: the script named a DBC message that did not exist
 - Fixed a signal sharing an ODT entry with part of a split signal being decoded from the wrong bytes
 - Fixed 29-bit CAN ids flagged with bit 31 in the A2L
 - Fixed extended CAN ids in the generated DBC

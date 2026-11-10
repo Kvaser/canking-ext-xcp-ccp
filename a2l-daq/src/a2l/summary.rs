@@ -60,25 +60,14 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
     let (project, rejected) = parse_tokens(&tokens, selected_refs(&[]));
 
     // Map each measurement name to the GROUPs that directly reference it.
-    let parsed_groups = parse_groups(&tokens);
     let mut membership: HashMap<String, Vec<String>> = HashMap::new();
-    for g in &parsed_groups {
-        for m in &g.measurements {
-            membership
-                .entry(m.clone())
-                .or_default()
-                .push(g.name.clone());
+    let mut groups = Vec::new();
+    for (group, measurements) in parse_groups(&tokens) {
+        for m in measurements {
+            membership.entry(m).or_default().push(group.name.clone());
         }
+        groups.push(group);
     }
-    let groups: Vec<GroupInfo> = parsed_groups
-        .into_iter()
-        .map(|g| GroupInfo {
-            name: g.name,
-            description: g.description,
-            root: g.root,
-            sub_groups: g.sub_groups,
-        })
-        .collect();
 
     // Build a summary of all signals
     let mut signals: Vec<SignalSummary> = project

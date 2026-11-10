@@ -66,6 +66,18 @@ export function formatBitrate(bps: number): string {
   return bps >= 1_000_000 ? `${bps / 1_000_000} Mbit/s` : `${bps / 1_000} kbit/s`;
 }
 
+/** The bus params the A2L declares, e.g. "CAN FD, 500 kbit/s arbitration, 2 Mbit/s data". */
+export function describeTransport(t: TransportInfo): string {
+  const parts = [t.canFd ? 'CAN FD' : 'CAN'];
+  if (t.bitrate !== undefined) {
+    parts.push(`${formatBitrate(t.bitrate)} arbitration`);
+  }
+  if (t.canFd && t.dataBitrate !== undefined) {
+    parts.push(`${formatBitrate(t.dataBitrate)} data`);
+  }
+  return parts.join(', ');
+}
+
 /**
  * Seed a {@link BusOverride} from the A2L-declared transport for the active protocol
  */
@@ -90,12 +102,12 @@ export interface TScriptOptions {
   timerStop: boolean;
   timerMs: string;
   /** With the timer: captures before DAQ stops; blank for no limit. */
-  maxCaptures?: string;
+  maxCaptures: string;
   /** Restart the DAQ init after this many ms without a DAQ frame; blank to never. */
-  watchdogMs?: string;
+  watchdogMs: string;
   /** Stop logging and DAQ for good when a frame with this CAN id arrives; blank for none. */
-  stopCanId?: string;
-  standalone?: boolean;
+  stopCanId: string;
+  standalone: boolean;
   bus: BusOverride;
 }
 
@@ -109,22 +121,18 @@ export function parseNonNegativeInt(text: string): number | null {
   return Number.isSafeInteger(value) ? value : null;
 }
 
-/** An optional count typed by the user: blank is undefined; null unless it is a whole number of at least 1. */
-export function parseOptionalPositiveInt(text: string): number | undefined | null {
+/** A whole number typed by the user: `blank` when empty; null unless it is from `min` to `max`. */
+export function parseBoundedInt<B>(
+  text: string,
+  blank: B,
+  min: number,
+  max = Number.MAX_SAFE_INTEGER,
+): number | B | null {
   if (text.trim() === '') {
-    return undefined;
+    return blank;
   }
   const value = parseNonNegativeInt(text);
-  return value !== null && value >= 1 ? value : null;
-}
-
-/** A DAQ list prescaler typed by the user: blank is 1; null unless it is a whole number from 1 to `max`. */
-export function parsePrescaler(text: string, max: number): number | null {
-  if (text.trim() === '') {
-    return 1;
-  }
-  const value = parseNonNegativeInt(text);
-  return value !== null && value >= 1 && value <= max ? value : null;
+  return value !== null && value >= min && value <= max ? value : null;
 }
 
 /** The largest CAN identifier: 29 bits, i.e. the extended-id range. */
@@ -144,9 +152,9 @@ export function parseCanId(text: string): number | null {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_CAN_ID ? value : null;
 }
 
-/** Format a CAN identifier the way the rest of this UI displays one. */
-export function formatCanId(id: number): string {
-  return `0x${id.toString(16).toUpperCase()}`;
+/** Format a CAN id or address as upper-case hex, e.g. "0x7FF". */
+export function formatHex(n: number | bigint): string {
+  return `0x${n.toString(16).toUpperCase()}`;
 }
 
 // XCP event channel time units (ASAM XCP TIMESTAMP/EVENT unit codes)

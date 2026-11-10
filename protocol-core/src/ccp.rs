@@ -1,6 +1,6 @@
 //! CCP 2.1 DAQ command generation.
 //!
-//! [`build_init_commands`] and [`build_stop_commands`] use the same five [`Phase`](crate::protocol::Phase)s as XCP.
+//! [`build_init_commands`] and [`build_stop_commands`] use the same five [`Phase`]s as XCP.
 //! Every command is an 8-byte CRO on the CRO CAN id, `[cmd, ctr, data0..data5]`, where `ctr` counts up per command and the slave echoes it in its CRM.
 //!
 //! | Phase | Command | Bytes `[cmd, ctr, ...]` | Response |
@@ -27,13 +27,9 @@
 //! - `WRITE_DAQ`'s `ext` byte is the signal's `ECU_ADDRESS_EXTENSION`.
 //! - `GET_SEED`/`UNLOCK` are optional because not every slave implements them. `UNLOCK` sends an all-zero key.
 
+use crate::protocol::{Command, ExpectedResponse, Phase, dword, word};
 use crate::types::{A2lProject, ByteOrder, DaqList, EventEntry, ParsedSignal};
 use std::collections::HashMap;
-
-pub use crate::protocol::{
-    Command as CcpCommand, ExpectedResponse as CcpResponse, Phase as CcpPhase,
-};
-use crate::protocol::{dword, word};
 
 // CCP 2.1 command codes.
 const CONNECT: u8 = 0x01;
@@ -66,70 +62,29 @@ struct Ctx<'a> {
 }
 
 /// Accumulates CRO commands, assigning each an auto-incrementing command counter.
+#[derive(Default)]
 struct Seq {
-    cmds: Vec<CcpCommand>,
+    cmds: Vec<Command>,
     ctr: u8,
 }
 
 impl Seq {
-    fn new() -> Self {
-        Seq {
-            cmds: Vec::new(),
-            ctr: 0,
-        }
-    }
-
-    /// Push a command expecting a plain positive response.
-    fn push(&mut self, phase: CcpPhase, cmd: u8, data: &[u8], label: String) {
-        self.push_full(phase, cmd, data, label, CcpResponse::Ack, false);
-    }
-
-    /// Push a command, tagging the response it carries.
-    fn push_resp(
-        &mut self,
-        phase: CcpPhase,
-        cmd: u8,
-        data: &[u8],
-        label: String,
-        response: CcpResponse,
-    ) {
-        self.push_full(phase, cmd, data, label, response, false);
-    }
-
-    fn push_optional(&mut self, phase: CcpPhase, cmd: u8, data: &[u8], label: String) {
-        self.push_full(phase, cmd, data, label, CcpResponse::Ack, true);
-    }
-
-    fn push_full(
-        &mut self,
-        phase: CcpPhase,
-        cmd: u8,
-        data: &[u8],
-        label: String,
-        response: CcpResponse,
-        optional: bool,
-    ) {
-        let mut bytes = Vec::with_capacity(2 + data.len());
-        bytes.push(cmd);
-        bytes.push(self.ctr);
+    /// Push a mandatory command expecting a plain positive response, returned for the caller to adjust.
+    fn push(&mut self, phase: Phase, cmd: u8, data: &[u8], label: String) -> &mut Command {
+        let mut bytes = vec![cmd, self.ctr];
         bytes.extend_from_slice(data);
         // A CRO is always 8 bytes
         bytes.resize(bytes.len().max(8), 0);
         self.ctr = self.ctr.wrapping_add(1);
-        self.cmds.push(CcpCommand {
-            phase,
-            bytes,
-            label,
-            response,
-            optional,
-        });
+        self.cmds.push(Command::ack(phase, bytes, label));
+        self.cmds.last_mut().expect("just pushed")
     }
 }
 
 /// Build the full CCP DAQ initialisation command sequence from a parsed project and packed DAQ lists.
-pub fn build_init_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<CcpCommand> {
+pub fn build_init_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Command> {
     let ctx = build_ctx(project);
-    let mut seq = Seq::new();
+    let mut seq = Seq::default();
     phase_connect(&mut seq, &ctx);
     phase_prepare(&mut seq, &ctx, daq_lists);
     phase_write_entries(&mut seq, &ctx, daq_lists);
@@ -139,18 +94,18 @@ pub fn build_init_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<C
 }
 
 /// Build the shutdown sequence for a running DAQ session: stop all lists, then end the session with `DISCONNECT`.
-pub fn build_stop_commands(project: &A2lProject, _daq_lists: &[DaqList]) -> Vec<CcpCommand> {
+pub fn build_stop_commands(project: &A2lProject, _daq_lists: &[DaqList]) -> Vec<Command> {
     let ctx = build_ctx(project);
-    let mut seq = Seq::new();
+    let mut seq = Seq::default();
     seq.push(
-        CcpPhase::Stop,
+        Phase::Stop,
         START_STOP_ALL,
         &[MODE_STOP],
         "START_STOP_ALL  stop all".into(),
     );
     let sa = ctx.station_address.to_le_bytes();
     seq.push(
-        CcpPhase::Stop,
+        Phase::Stop,
         DISCONNECT,
         &[0x01, 0x00, sa[0], sa[1]],
         format!(
@@ -181,35 +136,37 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
 fn phase_connect(seq: &mut Seq, ctx: &Ctx) {
     let sa = ctx.station_address.to_le_bytes();
     seq.push(
-        CcpPhase::Connect,
+        Phase::Connect,
         CONNECT,
         &[sa[0], sa[1]],
         format!("CONNECT  station=0x{:04X}", ctx.station_address),
     );
     seq.push(
-        CcpPhase::Connect,
+        Phase::Connect,
         GET_CCP_VERSION,
         &[0x02, 0x01],
         "GET_CCP_VERSION  2.1".into(),
     );
-    seq.push_optional(
-        CcpPhase::Connect,
+    seq.push(
+        Phase::Connect,
         GET_SEED,
         &[RESOURCE_DAQ, 0, 0, 0, 0, 0],
         "GET_SEED  resource=DAQ".into(),
-    );
-    seq.push_optional(
-        CcpPhase::Connect,
+    )
+    .optional = true;
+    seq.push(
+        Phase::Connect,
         UNLOCK,
         &[0, 0, 0, 0, 0, 0],
         "UNLOCK  key=zeros (dev placeholder; swap in a real seed-key algorithm here)".into(),
-    );
+    )
+    .optional = true;
 }
 
 /// Stop any running DAQ, then `GET_DAQ_SIZE` per list to clear it and learn its size and first PID.
 fn phase_prepare(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
     seq.push(
-        CcpPhase::Prepare,
+        Phase::Prepare,
         START_STOP_ALL,
         &[MODE_STOP],
         "START_STOP_ALL  stop all".into(),
@@ -217,13 +174,13 @@ fn phase_prepare(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
     let id = dword(ctx.dto_id, ctx.big_endian);
     for (idx, daq) in daq_lists.iter().enumerate() {
         let list = daq.id as u8;
-        seq.push_resp(
-            CcpPhase::Prepare,
+        seq.push(
+            Phase::Prepare,
             GET_DAQ_SIZE,
             &[list, 0x00, id[0], id[1], id[2], id[3]],
-            format!("GET_DAQ_SIZE  daq={} dto=0x{:X}", list, ctx.dto_id),
-            CcpResponse::FirstPid { daq_index: idx },
-        );
+            format!("GET_DAQ_SIZE  daq={list} dto=0x{:X}", ctx.dto_id),
+        )
+        .response = ExpectedResponse::FirstPid { daq_index: idx };
     }
 }
 
@@ -248,35 +205,22 @@ fn phase_write_entries(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
                 for i in 0..count as u32 {
                     let byte_addr = addr.wrapping_add(i * chunk as u32);
                     seq.push(
-                        CcpPhase::WriteEntries,
+                        Phase::WriteEntries,
                         SET_DAQ_PTR,
                         &[list, odt_no, element],
-                        format!(
-                            "SET_DAQ_PTR  daq={} odt={} element={}",
-                            list, odt_no, element
-                        ),
+                        format!("SET_DAQ_PTR  daq={list} odt={odt_no} element={element}"),
                     );
                     let a = dword(byte_addr, ctx.big_endian);
+                    let what = if ctx.bytes_only {
+                        format!("byte {}/{}", i + 1, entry.size)
+                    } else {
+                        format!("size={}", entry.size)
+                    };
                     seq.push(
-                        CcpPhase::WriteEntries,
+                        Phase::WriteEntries,
                         WRITE_DAQ,
                         &[chunk as u8, ext, a[0], a[1], a[2], a[3]],
-                        if ctx.bytes_only {
-                            format!(
-                                "WRITE_DAQ  {} byte {}/{} addr=0x{:08X}",
-                                entry.names.join("/"),
-                                i + 1,
-                                entry.size,
-                                byte_addr
-                            )
-                        } else {
-                            format!(
-                                "WRITE_DAQ  {} size={} addr=0x{:08X}",
-                                entry.names.join("/"),
-                                entry.size,
-                                byte_addr
-                            )
-                        },
+                        format!("WRITE_DAQ  {} {what} addr=0x{byte_addr:08X}", entry.name()),
                     );
                     element += 1;
                 }
@@ -285,8 +229,7 @@ fn phase_write_entries(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
     }
 }
 
-/// `START_STOP` in prepare mode per list: bind it to its raster (event channel),
-/// declare its last ODT number and the transmission prescaler.
+/// `START_STOP` in prepare mode per list: bind it to its raster (event channel), declare its last ODT number and the transmission prescaler.
 fn phase_set_mode(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
     for daq in daq_lists {
         let list = daq.id as u8;
@@ -300,12 +243,11 @@ fn phase_set_mode(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
         let prescaler = daq.prescaler.max(1);
         let pre = word(prescaler, ctx.big_endian);
         seq.push(
-            CcpPhase::SetMode,
+            Phase::SetMode,
             START_STOP,
             &[MODE_PREPARE, list, last_odt, event_ch, pre[0], pre[1]],
             format!(
-                "START_STOP  prepare daq={} last_odt={} event={} prescaler={}",
-                list, last_odt, event_ch, prescaler
+                "START_STOP  prepare daq={list} last_odt={last_odt} event={event_ch} prescaler={prescaler}"
             ),
         );
     }
@@ -314,7 +256,7 @@ fn phase_set_mode(seq: &mut Seq, ctx: &Ctx, daq_lists: &[DaqList]) {
 /// Start every prepared DAQ list synchronously.
 fn phase_start(seq: &mut Seq) {
     seq.push(
-        CcpPhase::Start,
+        Phase::Start,
         START_STOP_ALL,
         &[MODE_START],
         "START_STOP_ALL  start".into(),
@@ -379,29 +321,8 @@ mod tests {
         }]
     }
 
-    fn find(cmds: &[CcpCommand], code: u8) -> &CcpCommand {
+    fn find(cmds: &[Command], code: u8) -> &Command {
         cmds.iter().find(|c| c.bytes[0] == code).unwrap()
-    }
-
-    #[test]
-    fn init_phases_appear_in_order() {
-        let cmds = build_init_commands(&project(false), &one_daq_list());
-        let order = [
-            CcpPhase::Connect,
-            CcpPhase::Prepare,
-            CcpPhase::WriteEntries,
-            CcpPhase::SetMode,
-            CcpPhase::Start,
-        ];
-        let mut last = 0;
-        for c in &cmds {
-            let pos = order.iter().position(|p| *p == c.phase).unwrap();
-            assert!(pos >= last, "phase went backwards at {}", c.label);
-            last = pos;
-        }
-        for phase in order {
-            assert!(cmds.iter().any(|c| c.phase == phase), "missing {phase:?}");
-        }
     }
 
     #[test]
@@ -416,49 +337,6 @@ mod tests {
         assert!(
             cmds.iter().all(|c| c.bytes.len() == 8),
             "every CRO is 8 bytes"
-        );
-    }
-
-    #[test]
-    fn write_daq_carries_the_signal_address_extension() {
-        let mut p = project(false);
-        p.signals = vec![ParsedSignal {
-            name: "A".into(),
-            address_extension: 3,
-            ..Default::default()
-        }];
-        let cmds = build_init_commands(&p, &one_daq_list());
-        let writes: Vec<&[u8]> = cmds
-            .iter()
-            .filter(|c| c.bytes[0] == WRITE_DAQ)
-            .map(|c| c.bytes.as_slice())
-            .collect();
-        assert_eq!(writes[0][3], 3, "A: extension from its MEASUREMENT");
-        assert_eq!(writes.last().unwrap()[3], 0, "B: undeclared means 0");
-    }
-
-    #[test]
-    fn get_seed_and_unlock_are_optional_connect_phase_commands() {
-        let cmds = build_init_commands(&project(false), &one_daq_list());
-
-        let get_seed = find(&cmds, GET_SEED);
-        assert_eq!(get_seed.phase, CcpPhase::Connect);
-        assert_eq!(&get_seed.bytes[2..], &[0x02, 0, 0, 0, 0, 0], "resource=DAQ");
-        assert!(
-            get_seed.optional,
-            "GET_SEED must not abort init if unsupported"
-        );
-
-        let unlock = find(&cmds, UNLOCK);
-        assert_eq!(unlock.phase, CcpPhase::Connect);
-        assert_eq!(&unlock.bytes[2..], &[0, 0, 0, 0, 0, 0], "6-byte zero key");
-        assert!(unlock.optional, "UNLOCK must not abort init if unsupported");
-
-        assert!(
-            !cmds
-                .iter()
-                .any(|c| !matches!(c.bytes[0], GET_SEED | UNLOCK) && c.optional),
-            "every other command stays mandatory"
         );
     }
 
@@ -480,7 +358,7 @@ mod tests {
         assert_eq!(le_g.bytes[2], 0x00, "daq list 0");
         assert_eq!(&le_g.bytes[4..8], &0x456u32.to_le_bytes(), "dto id LE");
         assert_eq!(&be_g.bytes[4..8], &0x456u32.to_be_bytes(), "dto id BE");
-        assert_eq!(le_g.response, CcpResponse::FirstPid { daq_index: 0 });
+        assert_eq!(le_g.response, ExpectedResponse::FirstPid { daq_index: 0 });
     }
 
     #[test]
@@ -500,7 +378,7 @@ mod tests {
         let mut proj = project(true);
         proj.ccp_data.as_mut().unwrap().info.bytes_only = true;
         let cmds = build_init_commands(&proj, &one_daq_list());
-        let writes: Vec<&CcpCommand> = cmds.iter().filter(|c| c.bytes[0] == WRITE_DAQ).collect();
+        let writes: Vec<&Command> = cmds.iter().filter(|c| c.bytes[0] == WRITE_DAQ).collect();
 
         assert_eq!(writes.len(), 6, "one WRITE_DAQ per byte");
         assert!(
@@ -508,7 +386,7 @@ mod tests {
             "every element size 1"
         );
 
-        let ptrs: Vec<&CcpCommand> = cmds.iter().filter(|c| c.bytes[0] == SET_DAQ_PTR).collect();
+        let ptrs: Vec<&Command> = cmds.iter().filter(|c| c.bytes[0] == SET_DAQ_PTR).collect();
         assert_eq!(ptrs.len(), 6, "one SET_DAQ_PTR per byte element");
         let elements: Vec<u8> = ptrs.iter().map(|p| p.bytes[4]).collect();
         assert_eq!(elements, vec![0, 1, 2, 3, 4, 5], "element index advances");
@@ -525,8 +403,8 @@ mod tests {
     fn every_write_daq_is_preceded_by_its_own_set_daq_ptr() {
         let cmds = build_init_commands(&project(false), &one_daq_list());
 
-        let ptrs: Vec<&CcpCommand> = cmds.iter().filter(|c| c.bytes[0] == SET_DAQ_PTR).collect();
-        let writes: Vec<&CcpCommand> = cmds.iter().filter(|c| c.bytes[0] == WRITE_DAQ).collect();
+        let ptrs: Vec<&Command> = cmds.iter().filter(|c| c.bytes[0] == SET_DAQ_PTR).collect();
+        let writes: Vec<&Command> = cmds.iter().filter(|c| c.bytes[0] == WRITE_DAQ).collect();
         assert_eq!(writes.len(), 2, "one WRITE_DAQ per entry");
         assert_eq!(ptrs.len(), 2, "one SET_DAQ_PTR per element, not per ODT");
 
@@ -599,7 +477,7 @@ mod tests {
             &last.bytes[..3],
             &[START_STOP_ALL, last.bytes[1], MODE_START]
         );
-        assert_eq!(last.phase, CcpPhase::Start);
+        assert_eq!(last.phase, Phase::Start);
     }
 
     #[test]
@@ -614,6 +492,6 @@ mod tests {
             &0x0100u16.to_le_bytes(),
             "station addr LE"
         );
-        assert!(cmds.iter().all(|c| c.phase == CcpPhase::Stop));
+        assert!(cmds.iter().all(|c| c.phase == Phase::Stop));
     }
 }

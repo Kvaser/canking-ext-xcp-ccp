@@ -56,11 +56,11 @@ pub(super) fn dbc_config() -> TScriptConfig {
         stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
-        channels: vec![CanChannel {
+        channel: CanChannel {
             index: 0,
             bitrate: 500_000,
             data_bitrate: None,
-        }],
+        },
         pretrigger_ms: 0,
         signals: vec![SignalHook {
             stop: None,
@@ -70,7 +70,6 @@ pub(super) fn dbc_config() -> TScriptConfig {
         }],
         timer_ms: None,
         daq_init: None,
-        can_fd: false,
         traceability: vec![],
         decoders: vec![],
     }
@@ -86,7 +85,6 @@ pub(super) fn init_config(
         daq_init: Some(DaqInit {
             protocol,
             master_id: 0x455,
-            slave_id: 0x456,
             timeout_ms: 1000,
             commands,
             stop_commands: stop,

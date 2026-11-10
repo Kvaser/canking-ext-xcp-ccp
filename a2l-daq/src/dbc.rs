@@ -78,7 +78,8 @@ BU_: Slave\n\
 /// The DBC message name every DAQ CAN id gets
 pub const DAQ_MESSAGE_NAME: &str = "DAQ";
 
-fn message_name(can_id: u32, total_messages: usize) -> String {
+/// The DBC message name for `can_id` when the DBC has `total_messages` DAQ messages.
+pub(crate) fn message_name(can_id: u32, total_messages: usize) -> String {
     if total_messages <= 1 {
         DAQ_MESSAGE_NAME.to_string()
     } else {
@@ -198,11 +199,7 @@ pub fn create_dbc_file(
     }
 
     let prov = traceability_lines(source_name, project, daq_lists, protocol);
-    if !prov.is_empty() {
-        let body = prov.join("\n").replace('"', "'");
-        out.push('\n');
-        let _ = writeln!(out, "CM_ \"{body}\";");
-    }
+    let _ = writeln!(out, "\nCM_ \"{}\";", prov.join("\n").replace('"', "'"));
 
     if !sig_valtypes.is_empty() {
         out.push('\n');
@@ -216,7 +213,7 @@ pub fn create_dbc_file(
 
     if can_fd.is_some() {
         out.push('\n');
-        out.push_str(&fd_attribute_definitions());
+        out.push_str(FD_ATTRIBUTE_DEFINITIONS);
         out.push_str(&fd_frame_formats);
     }
 
@@ -234,18 +231,14 @@ fn fd_frame_len(needed: u16) -> u16 {
         .unwrap_or(64)
 }
 
-/// Returns the DBC attribute definitions shared by every CAN FD message, emitted once per file.
-fn fd_attribute_definitions() -> String {
-    let mut out = String::new();
-    out.push_str("BA_DEF_ \"BusType\" STRING ;\n");
-    out.push_str("BA_DEF_ BO_ \"VFrameFormat\" ENUM  \"StandardCAN\",\"ExtendedCAN\",\"reserved\",\
-                \"J1939PG\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\
-                \"reserved\",\"reserved\",\"reserved\",\"reserved\",\"StandardCAN_FD\",\"ExtendedCAN_FD\";\n");
-    out.push_str("BA_DEF_DEF_ \"BusType\" \"CAN FD\";\n");
-    out.push_str("BA_DEF_DEF_ \"VFrameFormat\" \"StandardCAN\";\n");
-    out.push_str("BA_ \"BusType\" \"CAN FD\";\n");
-    out
-}
+/// The DBC attribute definitions shared by every CAN FD message, emitted once per file.
+const FD_ATTRIBUTE_DEFINITIONS: &str = "BA_DEF_ \"BusType\" STRING ;\n\
+    BA_DEF_ BO_ \"VFrameFormat\" ENUM  \"StandardCAN\",\"ExtendedCAN\",\"reserved\",\
+    \"J1939PG\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\
+    \"reserved\",\"reserved\",\"reserved\",\"reserved\",\"StandardCAN_FD\",\"ExtendedCAN_FD\";\n\
+    BA_DEF_DEF_ \"BusType\" \"CAN FD\";\n\
+    BA_DEF_DEF_ \"VFrameFormat\" \"StandardCAN\";\n\
+    BA_ \"BusType\" \"CAN FD\";\n";
 
 /// Returns the `VFrameFormat` attribute value for one CAN FD message.
 fn fd_frame_format_line(can_id: u32) -> String {

@@ -11,7 +11,7 @@ The data model, the protocol commands and the frame layout come from [protocol-c
 ```
 A2L text ──a2l::parse_a2l──> A2lProject ──pipeline::build──> DaqList[] + DBC + Diagnostic[]
                                                        ├──> Config JSON          (feature serde)
-                                                       └──> tscript::generate    (feature tscript)
+                                                       └──> tscript::generate
 ```
 
 `pipeline::build` applies the user's event assignments, packs the lists (`daq::build_daq_list`) and renders the DBC. Its
@@ -123,7 +123,7 @@ The DBC is generated in both modes, since it decodes the log.
     |-datatype.rs, encoding.rs
     |-summary.rs              inspect(): the view a selection UI needs
     |-unread.rs               Keywords that are flagged but not read
-  |-tscript/                The t-script generator (feature tscript)
+  |-tscript/                The t-script generator
     |-mod.rs                  TScriptConfig, DaqInit, signal hooks
     |-emit.rs                 Renders the .t source
     |-trigger.rs, trigger_expr.rs  Trigger latches, conditions, text expressions
@@ -140,8 +140,7 @@ From the workspace root:
 ```sh
 cargo run -p a2l-daq --release -- path/to/ecu.a2l     # the CLI; prompts for everything else
 cargo rustc -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib   # the wasm component
-cargo test -p a2l-daq                                    # default features, the CLI
-cargo test -p a2l-daq --no-default-features --features serde
+cargo test -p a2l-daq                                    # the library and the CLI
 ```
 
 The CLI writes `<a2l>.dbc` and a `.t` next to the A2L, the `.t` named with at most 8 characters from `A-Z a-z 0-9 _ -`,

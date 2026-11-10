@@ -1,27 +1,19 @@
 import { Box, Checkbox, FormControlLabel, MenuItem, TextField, Typography } from '@mui/material';
 import { TransportInfo } from '../a2l-daq-wasm/interfaces/kvaser-a2l-daq-generator.js';
-import { ARBITRATION_BITRATES, BusOverride, busOverrideFromTransport, DATA_BITRATES, formatBitrate } from './util';
+import {
+  ARBITRATION_BITRATES,
+  BusOverride,
+  busOverrideFromTransport,
+  DATA_BITRATES,
+  describeTransport,
+  formatBitrate,
+} from './util';
 
 export interface BusSectionProps {
   bus: BusOverride;
   onBusChange: (value: BusOverride) => void;
   /** A2L-declared transport for the active protocol, used to pre-fill / show defaults. */
   detected?: TransportInfo;
-}
-
-/** Human-readable summary of the bus params the A2L declares. */
-function describeTransport(t: TransportInfo | undefined): string {
-  if (!t) {
-    return 'The A2L does not declare bus parameters; defaults are used.';
-  }
-  const parts = [t.canFd ? 'CAN FD' : 'CAN'];
-  if (t.bitrate !== undefined) {
-    parts.push(`${formatBitrate(t.bitrate)} arbitration`);
-  }
-  if (t.canFd && t.dataBitrate !== undefined) {
-    parts.push(`${formatBitrate(t.dataBitrate)} data`);
-  }
-  return `A2L declares: ${parts.join(', ')}.`;
 }
 
 /**
@@ -38,7 +30,10 @@ function BusSection({ bus, onBusChange, detected }: BusSectionProps) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, my: 1 }}>
       <Typography variant="caption" color="text.secondary">
-        {describeTransport(detected)} Enable the override only if these values are wrong for your setup.
+        {detected
+          ? `A2L declares: ${describeTransport(detected)}.`
+          : 'The A2L does not declare bus parameters; defaults are used.'}{' '}
+        Enable the override only if these values are wrong for your setup.
       </Typography>
       <FormControlLabel
         control={<Checkbox checked={bus.enabled} onChange={e => toggle(e.target.checked)} />}

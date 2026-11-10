@@ -1,42 +1,17 @@
 //! Parsing `/begin MEASUREMENT ... /end MEASUREMENT` blocks into [`ParsedSignal`]s.
 
-use super::datatype::A2lDataType;
-use super::tokenizer::{extract_block, parse_u16_token, parse_u64_token};
+use super::common::parse_byte_order;
+use super::datatype::datatype;
+use super::tokenizer::{blocks, extract_block, parse_u16_token, parse_u64_token, value_after};
 use super::{ByteOrder, Conversion, ParsedSignal};
 
 /// Parses the tokens of an A2L file and extracts all MEASUREMENT blocks, returning a vector of [`ParsedSignal`]s.
 pub(super) fn parse_measurements(tokens: &[String], selected: &[&str]) -> Vec<ParsedSignal> {
-    let mut signals = Vec::new();
-    let mut i = 0;
-
-    while i < tokens.len() {
-        if tokens[i] == "/begin" && tokens.get(i + 1).map(String::as_str) == Some("MEASUREMENT") {
-            i += 2;
-            let name = match tokens.get(i) {
-                Some(t) => t.clone(),
-                None => break,
-            };
-            i += 1;
-            let block = extract_block(tokens, &mut i);
-            let include = selected.is_empty() || selected.iter().any(|&s| s == name);
-            if include && let Some(signal) = parse_measurement_block(&name, block) {
-                signals.push(signal);
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    signals
-}
-
-/// The token following `keyword`, unquoted, when the block names it and the value is non-empty.
-fn keyword_value(tokens: &[String], keyword: &str) -> Option<String> {
-    let at = tokens.iter().position(|t| t == keyword)?;
-    tokens
-        .get(at + 1)
-        .map(|t| t.trim_matches('"').to_string())
-        .filter(|t| !t.is_empty())
+    blocks(tokens, "MEASUREMENT")
+        .filter_map(|b| b.split_first())
+        .filter(|(name, _)| selected.is_empty() || selected.contains(&name.as_str()))
+        .filter_map(|(name, block)| parse_measurement_block(name, block))
+        .collect()
 }
 
 /// Parses the content tokens of a MEASUREMENT block.
@@ -55,17 +30,11 @@ fn parse_measurement_block(name: &str, tokens: &[String]) -> Option<ParsedSignal
     };
 
     // 2. Datatype
-    let data_type = A2lDataType::from_token(tokens.get(pos)?)?;
-    let base_size = data_type.size_bytes();
-    let is_signed = data_type.is_signed();
-    let is_float = data_type.is_float();
+    let (base_size, is_signed, is_float) = datatype(tokens.get(pos)?)?;
     pos += 1;
 
     // 3. Conversion identifier
-    let conversion_identifier = tokens
-        .get(pos)
-        .filter(|t| A2lDataType::from_token(t).is_none())?
-        .clone();
+    let conversion_identifier = tokens.get(pos).filter(|t| datatype(t).is_none())?.clone();
     pos += 1;
 
     // 4. Resolution, 5. Accuracy
@@ -104,11 +73,7 @@ fn parse_measurement_block(name: &str, tokens: &[String]) -> Option<ParsedSignal
                 pos += 2;
             }
             "BYTE_ORDER" => {
-                byte_order = tokens.get(pos + 1).and_then(|t| match t.as_str() {
-                    "MSB_FIRST" => Some(ByteOrder::MsbFirst),
-                    "MSB_LAST" => Some(ByteOrder::MsbLast),
-                    _ => None,
-                });
+                byte_order = tokens.get(pos + 1).and_then(|t| parse_byte_order(t));
                 pos += 2;
             }
             "ARRAY_SIZE" => {
@@ -145,8 +110,11 @@ fn parse_measurement_block(name: &str, tokens: &[String]) -> Option<ParsedSignal
                 if keyword == "VIRTUAL" {
                     virtual_inputs.extend(block.iter().cloned());
                 }
-                if let Some(id) = keyword_value(block, "VIRTUAL_CONVERSION") {
-                    virtual_conversion = Some(id);
+                if let Some(id) = value_after(block, "VIRTUAL_CONVERSION")
+                    .map(|t| t.trim_matches('"'))
+                    .filter(|t| !t.is_empty())
+                {
+                    virtual_conversion = Some(id.to_string());
                 }
             }
             _ => {

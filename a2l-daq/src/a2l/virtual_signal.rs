@@ -76,105 +76,21 @@ pub(super) fn resolve_virtual_signals(project: &mut A2lProject) -> Vec<RejectedV
         if sig.virtual_inputs.is_empty() {
             continue;
         }
-        let own = sig
-            .conversion
-            .as_ref()
-            .and_then(|c| project.compu_methods.get(&c.identifier));
-
-        let reduced = own
-            .and_then(|cm| cm.formula.as_deref())
-            .and_then(linear_from_formula_var);
-
-        let input_name = match reduced {
-            Some((Some(index), ..)) => match sig.virtual_inputs.get(index - 1) {
-                Some(name) => name.clone(),
-                None => {
-                    // Reject virtual signals that reference an input index that doesn't exist.
-                    rejected.push(RejectedVirtual {
-                        reason: RejectedVirtualReason::InputOutOfRange {
-                            index,
-                            available: sig.virtual_inputs.len(),
-                        },
-                        signal: sig.clone(),
-                    });
-                    continue;
-                }
-            },
-            // Check that the virtual signal has exactly one input, and use that as the input name.
-            // Reject virtual signals with multiple inputs, since we (currently) cannot resolve them into a single measurable signal.
-            _ if sig.virtual_inputs.len() == 1 => sig.virtual_inputs[0].clone(),
-            _ => {
+        let (input, method) = match resolve(sig, &real, &project.compu_methods) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
                 rejected.push(RejectedVirtual {
-                    reason: RejectedVirtualReason::MultipleInputs {
-                        inputs: sig.virtual_inputs.clone(),
-                    },
+                    reason,
                     signal: sig.clone(),
                 });
                 continue;
             }
         };
 
-        // Look up the input signal by name, and reject if it doesn't exist.
-        let Some(input) = real.get(&input_name) else {
-            rejected.push(RejectedVirtual {
-                reason: RejectedVirtualReason::UnknownInput { input: input_name },
-                signal: sig.clone(),
-            });
-            continue;
-        };
-
-        // Look up the input's conversion method, and reject if it doesn't exist or has no formula.
-        let Some(formula) = own.and_then(|cm| cm.formula.clone()) else {
-            rejected.push(RejectedVirtual {
-                reason: RejectedVirtualReason::MissingFormula,
-                signal: sig.clone(),
-            });
-            continue;
-        };
-
-        // Reduce the virtual's formula to a linear function of the input's conversion, and reject if it can't be done.
-        let Some((_, f_form, o_form)) = reduced else {
-            rejected.push(RejectedVirtual {
-                reason: RejectedVirtualReason::NonLinearFormula { formula },
-                signal: sig.clone(),
-            });
-            continue;
-        };
-
-        let input_cm = input
-            .conversion
-            .as_ref()
-            .and_then(|c| project.compu_methods.get(&c.identifier));
-        let (f_in, o_in) = input_cm
-            .map(|cm| (cm.factor, cm.offset))
-            .unwrap_or((1.0, 0.0));
-
-        let unit = own
-            .map(|cm| cm.unit.clone())
-            .filter(|u| !u.is_empty())
-            .or_else(|| {
-                sig.virtual_conversion
-                    .as_ref()
-                    .and_then(|id| project.compu_methods.get(id))
-                    .map(|cm| cm.unit.clone())
-            })
-            .unwrap_or_default();
-
         let identifier = format!("{}.VIRTUAL_RESOLVED", sig.name);
-        synthetic.push((
-            identifier.clone(),
-            CompuMethod {
-                factor: f_form * f_in,
-                offset: f_form * o_in + o_form,
-                unit,
-                text_table: Vec::new(),
-                default_text: None,
-                formula: Some(formula),
-                unsupported: input_cm.and_then(|cm| cm.unsupported.clone()),
-            },
-        ));
+        synthetic.push((identifier.clone(), method));
 
-        sig.virtual_inputs = vec![input_name];
+        sig.virtual_inputs = vec![input.name.clone()];
         sig.ecu_address = input.ecu_address;
         sig.address_extension = input.address_extension;
         sig.size = input.size;
@@ -182,9 +98,6 @@ pub(super) fn resolve_virtual_signals(project: &mut A2lProject) -> Vec<RejectedV
         sig.is_float = input.is_float;
         sig.byte_order = input.byte_order.clone();
         sig.bit_mask = input.bit_mask;
-        if sig.event.is_none() {
-            sig.event = input.event.clone();
-        }
         sig.conversion = Some(Conversion { identifier });
     }
 
@@ -194,4 +107,87 @@ pub(super) fn resolve_virtual_signals(project: &mut A2lProject) -> Vec<RejectedV
         .signals
         .retain(|s| !dropped.contains(s.name.as_str()));
     rejected
+}
+
+/// The real input a virtual `sig` reads, and the conversion from that input's raw value to `sig`'s physical value.
+fn resolve<'a>(
+    sig: &ParsedSignal,
+    real: &'a HashMap<String, ParsedSignal>,
+    compu_methods: &HashMap<String, CompuMethod>,
+) -> Result<(&'a ParsedSignal, CompuMethod), RejectedVirtualReason> {
+    let own = sig
+        .conversion
+        .as_ref()
+        .and_then(|c| compu_methods.get(&c.identifier));
+
+    let reduced = own
+        .and_then(|cm| cm.formula.as_deref())
+        .and_then(linear_from_formula_var);
+
+    let input_name = match reduced {
+        // Reject virtual signals that reference an input index that doesn't exist.
+        Some((Some(index), ..)) => {
+            sig.virtual_inputs
+                .get(index - 1)
+                .ok_or(RejectedVirtualReason::InputOutOfRange {
+                    index,
+                    available: sig.virtual_inputs.len(),
+                })?
+        }
+        // Check that the virtual signal has exactly one input, and use that as the input name.
+        // Reject virtual signals with multiple inputs, since we (currently) cannot resolve them into a single measurable signal.
+        _ if sig.virtual_inputs.len() == 1 => &sig.virtual_inputs[0],
+        _ => {
+            return Err(RejectedVirtualReason::MultipleInputs {
+                inputs: sig.virtual_inputs.clone(),
+            });
+        }
+    };
+
+    // Look up the input signal by name, and reject if it doesn't exist.
+    let input = real
+        .get(input_name)
+        .ok_or_else(|| RejectedVirtualReason::UnknownInput {
+            input: input_name.clone(),
+        })?;
+
+    // Look up the input's conversion method, and reject if it doesn't exist or has no formula.
+    let formula = own
+        .and_then(|cm| cm.formula.clone())
+        .ok_or(RejectedVirtualReason::MissingFormula)?;
+
+    // Reduce the virtual's formula to a linear function of the input's conversion, and reject if it can't be done.
+    let Some((_, f_form, o_form)) = reduced else {
+        return Err(RejectedVirtualReason::NonLinearFormula { formula });
+    };
+
+    let input_cm = input
+        .conversion
+        .as_ref()
+        .and_then(|c| compu_methods.get(&c.identifier));
+    let (f_in, o_in) = input_cm
+        .map(|cm| (cm.factor, cm.offset))
+        .unwrap_or((1.0, 0.0));
+
+    let unit = own
+        .map(|cm| cm.unit.clone())
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            sig.virtual_conversion
+                .as_ref()
+                .and_then(|id| compu_methods.get(id))
+                .map(|cm| cm.unit.clone())
+        })
+        .unwrap_or_default();
+
+    let method = CompuMethod {
+        factor: f_form * f_in,
+        offset: f_form * o_in + o_form,
+        unit,
+        text_table: Vec::new(),
+        default_text: None,
+        formula: Some(formula),
+        unsupported: input_cm.and_then(|cm| cm.unsupported.clone()),
+    };
+    Ok((input, method))
 }

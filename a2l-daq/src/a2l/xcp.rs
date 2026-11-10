@@ -1,39 +1,30 @@
 //! Parsing the module-level `/begin IF_DATA XCP ... /end IF_DATA` block: DAQ list
 //! capabilities, event channels, and the `XCP_ON_CAN` transport parameters.
 
-use super::tokenizer::{extract_block, parse_can_id_token, parse_u16_token, parse_u32_token};
+use super::common::parse_byte_order;
+use super::tokenizer::{
+    blocks, child_blocks, extract_block, parse_can_id_token, parse_u16_token, parse_u32_token,
+    value_after,
+};
 use super::{
-    ByteOrder, CanFdInfo, CanIdSource, DaqInfo, DaqListDef, DaqMode, EventEntry, EventInfo,
-    Protocol, ProtocolLayerInfo, XcpData, XcpInfo,
+    CanFdInfo, CanIdSource, DaqInfo, DaqListDef, DaqMode, EventEntry, EventInfo, Protocol,
+    ProtocolLayerInfo, XcpData, XcpInfo,
 };
 
 /// Finds the module-level `/begin IF_DATA XCP /end IF_DATA` and returns the parsed `XcpData`
 ///
 /// Returns `None` if the file has no XCP interface at all.
 pub(super) fn parse_if_data_xcp(tokens: &[String]) -> Option<XcpData> {
-    let mut fallback: Option<&[String]> = None;
-
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "/begin"
-            && tokens.get(i + 1).map(String::as_str) == Some("IF_DATA")
-            && tokens
-                .get(i + 2)
-                .and_then(|t| Protocol::from_if_data_tag(t))
-                == Some(Protocol::Xcp)
-        {
-            i += 3; // consume /begin IF_DATA XCP
-            let block = extract_block(tokens, &mut i);
-            if describes_the_interface(block) {
-                return Some(parse_xcp_contents(block));
-            }
-            fallback.get_or_insert(block);
-        } else {
-            i += 1;
-        }
-    }
-
-    fallback.map(parse_xcp_contents)
+    let xcp: Vec<&[String]> = blocks(tokens, "IF_DATA")
+        .filter_map(|b| b.split_first())
+        .filter(|(tag, _)| Protocol::from_if_data_tag(tag) == Some(Protocol::Xcp))
+        .map(|(_, block)| block)
+        .collect();
+    let block = xcp
+        .iter()
+        .find(|b| describes_the_interface(b))
+        .or(xcp.first())?;
+    Some(parse_xcp_contents(block))
 }
 
 /// Whether an `IF_DATA XCP` block carries interface-level content rather than the per-measurement `DAQ_EVENT` reference.
@@ -52,31 +43,22 @@ fn parse_xcp_contents(tokens: &[String]) -> XcpData {
     let mut protocol_layer: Option<ProtocolLayerInfo> = None;
     let mut daq_list_can_ids: Vec<(u16, CanIdSource)> = Vec::new();
 
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "/begin" {
-            let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
-            i += 2;
-            let block = extract_block(tokens, &mut i);
-
-            match keyword {
-                "DAQ" => {
-                    let (info, events) = parse_daq_contents(block);
-                    daq_info = info;
-                    event_info.events = events;
-                }
-                "XCP_ON_CAN" => {
-                    let (info, overrides) = parse_xcp_on_can(block);
-                    xcp_info = info;
-                    daq_list_can_ids = overrides;
-                }
-                "PROTOCOL_LAYER" => {
-                    protocol_layer = Some(parse_protocol_layer(block));
-                }
-                _ => {} // SEGMENT, PAG, PGM, etc.
+    for (keyword, block) in child_blocks(tokens) {
+        match keyword {
+            "DAQ" => {
+                let (info, events) = parse_daq_contents(block);
+                daq_info = info;
+                event_info.events = events;
             }
-        } else {
-            i += 1;
+            "XCP_ON_CAN" => {
+                let (info, overrides) = parse_xcp_on_can(block);
+                xcp_info = info;
+                daq_list_can_ids = overrides;
+            }
+            "PROTOCOL_LAYER" => {
+                protocol_layer = Some(parse_protocol_layer(block));
+            }
+            _ => {} // SEGMENT, PAG, PGM, etc.
         }
     }
 
@@ -137,7 +119,7 @@ fn parse_daq_contents(tokens: &[String]) -> (DaqInfo, Vec<EventEntry>) {
                     }
                 }
                 "EVENT" => {
-                    if let Some(entry) = parse_event_block(block) {
+                    if let Some(entry) = parse_xcp_event(block) {
                         events.push(entry);
                     }
                 }
@@ -203,64 +185,43 @@ fn parse_timestamp_supported(tokens: &[String]) -> (u16, bool) {
 ///
 /// Returns a `DaqListDef` with the list identifier, number of ODTs, maximum ODT entries, and optional event channel and first PID.
 fn parse_daq_list_block(tokens: &[String]) -> Option<DaqListDef> {
-    let identifier = parse_u16_token(tokens.first()?)?;
-    let mut nr_odt = 0u16;
-    let mut max_odt_entries = 0u16;
-    let mut event_fixed = None;
-    let mut first_pid = None;
-
-    let mut i = 1;
-    while i < tokens.len() {
-        match tokens[i].as_str() {
-            "FIRST_PID" => {
-                first_pid = tokens.get(i + 1).and_then(|t| parse_u16_token(t));
-                i += 2;
-            }
-            "MAX_ODT" => {
-                nr_odt = tokens
-                    .get(i + 1)
-                    .and_then(|t| parse_u16_token(t))
-                    .unwrap_or(0);
-                i += 2;
-            }
-            "MAX_ODT_ENTRIES" => {
-                max_odt_entries = tokens
-                    .get(i + 1)
-                    .and_then(|t| parse_u16_token(t))
-                    .unwrap_or(0);
-                i += 2;
-            }
-            "EVENT_FIXED" => {
-                event_fixed = tokens.get(i + 1).and_then(|t| parse_u16_token(t));
-                i += 2;
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-
+    let value = |keyword| value_after(tokens, keyword).and_then(|t| parse_u16_token(t));
     Some(DaqListDef {
-        identifier,
-        nr_odt,
-        max_odt_entries,
-        event_fixed,
-        first_pid,
+        identifier: parse_u16_token(tokens.first()?)?,
+        nr_odt: value("MAX_ODT").unwrap_or(0),
+        max_odt_entries: value("MAX_ODT_ENTRIES").unwrap_or(0),
+        event_fixed: value("EVENT_FIXED"),
+        first_pid: value("FIRST_PID"),
         can_id: CanIdSource::Default, // filled in later from any DAQ_LIST_CAN_ID override
     })
 }
 
-/// Parses a `/begin EVENT` block.
+/// Parses an XCP `/begin EVENT` block: `"name" "short name" channel DAQ max_daq_list time_cycle time_unit ...`.
+pub(super) fn parse_xcp_event(tokens: &[String]) -> Option<EventEntry> {
+    parse_event_entry(tokens, 5, 6)
+}
+
+/// Parses an event declaration `"name" "short name" channel ...` whose time cycle and unit are at `cycle_at`/`unit_at`.
 ///
 /// Returns an `EventEntry` with the channel number, name, and optional time cycle/unit.
-pub(super) fn parse_event_block(tokens: &[String]) -> Option<EventEntry> {
+pub(super) fn parse_event_entry(
+    tokens: &[String],
+    cycle_at: usize,
+    unit_at: usize,
+) -> Option<EventEntry> {
     let name = tokens
         .first()
         .filter(|t| t.starts_with('"'))
         .map(|t| t.trim_matches('"').to_string())?;
     let channel = parse_u32_token(tokens.get(2)?)?;
-    let time_cycle = tokens.get(5).and_then(|t| parse_u32_token(t)).unwrap_or(0);
-    let time_unit = tokens.get(6).and_then(|t| parse_u32_token(t)).unwrap_or(0);
+    let time_cycle = tokens
+        .get(cycle_at)
+        .and_then(|t| parse_u32_token(t))
+        .unwrap_or(0);
+    let time_unit = tokens
+        .get(unit_at)
+        .and_then(|t| parse_u32_token(t))
+        .unwrap_or(0);
 
     Some(EventEntry {
         channel,
@@ -362,38 +323,13 @@ fn parse_daq_list_can_id(tokens: &[String]) -> Option<(u16, CanIdSource)> {
 ///
 /// Returns a `CanFdInfo` with the maximum DLC and optional data transfer baud rate.
 fn parse_can_fd(tokens: &[String]) -> CanFdInfo {
-    let mut max_dlc = 0u16;
-    let mut data_baudrate = None;
-    let mut max_dlc_required = false;
-
-    let mut i = 0;
-    while i < tokens.len() {
-        match tokens[i].as_str() {
-            "MAX_DLC" => {
-                max_dlc = tokens
-                    .get(i + 1)
-                    .and_then(|t| parse_u16_token(t))
-                    .unwrap_or(0);
-                i += 2;
-            }
-            "CAN_FD_DATA_TRANSFER_BAUDRATE" => {
-                data_baudrate = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
-                i += 2;
-            }
-            "MAX_DLC_REQUIRED" => {
-                max_dlc_required = true;
-                i += 1;
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-
     CanFdInfo {
-        max_dlc,
-        data_baudrate,
-        max_dlc_required,
+        max_dlc: value_after(tokens, "MAX_DLC")
+            .and_then(|t| parse_u16_token(t))
+            .unwrap_or(0),
+        data_baudrate: value_after(tokens, "CAN_FD_DATA_TRANSFER_BAUDRATE")
+            .and_then(|t| parse_u32_token(t)),
+        max_dlc_required: tokens.iter().any(|t| t == "MAX_DLC_REQUIRED"),
     }
 }
 
@@ -403,18 +339,12 @@ fn parse_can_fd(tokens: &[String]) -> CanFdInfo {
 fn parse_protocol_layer(tokens: &[String]) -> ProtocolLayerInfo {
     let max_cto = tokens.get(8).and_then(|t| parse_u16_token(t)).unwrap_or(0);
     let max_dto = tokens.get(9).and_then(|t| parse_u16_token(t)).unwrap_or(0);
-    let mut byte_order = None;
-    for t in tokens.iter().skip(10) {
-        match t.as_str() {
-            "BYTE_ORDER_MSB_LAST" => {
-                byte_order = Some(ByteOrder::MsbLast);
-            }
-            "BYTE_ORDER_MSB_FIRST" => {
-                byte_order = Some(ByteOrder::MsbFirst);
-            }
-            _ => {}
-        }
-    }
+    // The last `BYTE_ORDER_MSB_FIRST`/`BYTE_ORDER_MSB_LAST` after the fixed parameters wins.
+    let byte_order = tokens
+        .iter()
+        .skip(10)
+        .rev()
+        .find_map(|t| t.strip_prefix("BYTE_ORDER_").and_then(parse_byte_order));
     ProtocolLayerInfo {
         byte_order,
         max_cto,

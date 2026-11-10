@@ -11,6 +11,32 @@ use exports::kvaser::a2l_daq::generator as bindings;
 
 struct Component;
 
+/// Parse the A2L, build the DAQ lists for `assignments`, and warn about selected signals that didn't survive parsing.
+fn build_core(
+    a2l: &str,
+    source_name: &str,
+    selected: &[String],
+    assignments: Vec<bindings::EventAssignment>,
+    protocol: bindings::Protocol,
+) -> Result<(crate::A2lProject, crate::CoreOutput), String> {
+    let (mut project, rejected) =
+        crate::parse_a2l_with_rejects(a2l, selected).map_err(|e| e.to_string())?;
+    let assignments: Vec<(String, Vec<String>)> = assignments
+        .into_iter()
+        .map(|a| (a.event, a.signals))
+        .collect();
+    let mut core = crate::build(
+        &mut project,
+        &assignments,
+        protocol_from_wit(protocol),
+        source_name,
+    )
+    .map_err(|e| e.to_string())?;
+    core.warnings
+        .extend(crate::dropped_signals(&project, selected, &rejected));
+    Ok((project, core))
+}
+
 impl bindings::Guest for Component {
     fn inspect(a2l: String) -> Result<bindings::A2lSummary, String> {
         let summary = crate::inspect(&a2l).map_err(|e| e.to_string())?;
@@ -44,21 +70,7 @@ impl bindings::Guest for Component {
         assignments: Vec<bindings::EventAssignment>,
         protocol: bindings::Protocol,
     ) -> Result<bindings::CoreOutput, String> {
-        let (mut project, rejected) =
-            crate::parse_a2l_with_rejects(&a2l, &selected).map_err(|e| e.to_string())?;
-        let assignments: Vec<(String, Vec<String>)> = assignments
-            .into_iter()
-            .map(|a| (a.event, a.signals))
-            .collect();
-        let mut core = crate::build(
-            &mut project,
-            &assignments,
-            protocol_from_wit(protocol),
-            &source_name,
-        )
-        .map_err(|e| e.to_string())?;
-        core.warnings
-            .extend(crate::dropped_signals(&project, &selected, &rejected));
+        let (_, core) = build_core(&a2l, &source_name, &selected, assignments, protocol)?;
         Ok(core_to_wit(core))
     }
 
@@ -74,21 +86,11 @@ impl bindings::Guest for Component {
         protocol: bindings::Protocol,
     ) -> Result<bindings::ConfigOutput, String> {
         let proto = protocol_from_wit(protocol);
-        let (mut project, rejected) =
-            crate::parse_a2l_with_rejects(&a2l, &selected).map_err(|e| e.to_string())?;
-        let assignments: Vec<(String, Vec<String>)> = assignments
-            .into_iter()
-            .map(|a| (a.event, a.signals))
-            .collect();
-
-        let mut core = crate::build(&mut project, &assignments, proto, &source_name)
-            .map_err(|e| e.to_string())?;
-        core.warnings
-            .extend(crate::dropped_signals(&project, &selected, &rejected));
+        let (project, mut core) = build_core(&a2l, &source_name, &selected, assignments, protocol)?;
         crate::apply_can_id_overrides(&mut core.daq_lists, &daq_can_id_overrides);
         crate::apply_prescalers(&mut core.daq_lists, &daq_prescalers);
 
-        let config = crate::Config {
+        let config = protocol_core::config::Config {
             project,
             daq_lists: core.daq_lists,
             start_daq,
@@ -115,34 +117,21 @@ impl bindings::Guest for Component {
         protocol: bindings::Protocol,
     ) -> Result<bindings::TscriptOutput, String> {
         let proto = protocol_from_wit(protocol);
-        let (mut project, rejected) =
-            crate::parse_a2l_with_rejects(&a2l, &selected).map_err(|e| e.to_string())?;
-        let assignments: Vec<(String, Vec<String>)> = assignments
-            .into_iter()
-            .map(|a| (a.event, a.signals))
-            .collect();
-        let mut core = crate::build(&mut project, &assignments, proto, &source_name)
-            .map_err(|e| e.to_string())?;
-        core.warnings
-            .extend(crate::dropped_signals(&project, &selected, &rejected));
+        let (project, mut core) = build_core(&a2l, &source_name, &selected, assignments, protocol)?;
         crate::apply_can_id_overrides(&mut core.daq_lists, &daq_can_id_overrides);
         crate::apply_prescalers(&mut core.daq_lists, &daq_prescalers);
 
         // Manual override if chosen, else the A2L transport block's defaults.
-        let (is_fd, bitrate, data_bitrate) = match &options.bus {
+        let (bitrate, data_bitrate) = match &options.bus {
             Some(bus) => {
                 let is_fd = matches!(bus.mode, bindings::CanMode::CanFd);
                 let data =
                     is_fd.then(|| bus.data_bitrate.unwrap_or(crate::DEFAULT_FD_DATA_BITRATE));
-                (is_fd, bus.bitrate, data)
+                (bus.bitrate, data)
             }
             None => {
                 let defaults = crate::bus_defaults(&project, proto);
-                (
-                    defaults.can_fd_data_bitrate.is_some(),
-                    defaults.bitrate,
-                    defaults.can_fd_data_bitrate,
-                )
+                (defaults.bitrate, defaults.can_fd_data_bitrate)
             }
         };
 
@@ -210,24 +199,18 @@ impl bindings::Guest for Component {
         );
 
         let config = crate::TScriptConfig {
-            channels: vec![crate::CanChannel {
+            channel: crate::CanChannel {
                 index: options.channel_index,
                 bitrate,
                 data_bitrate,
-            }],
+            },
             pretrigger_ms: options.pretrigger_ms,
             signals,
             timer_ms: options.timer_ms,
             max_captures: options.max_captures,
             daq_watchdog_ms: options.daq_watchdog_ms,
             stop_can_id: options.stop_can_id,
-            daq_init: crate::build_daq_init(
-                proto,
-                &project,
-                &core.daq_lists,
-                crate::DEFAULT_INIT_TIMEOUT_MS,
-            ),
-            can_fd: is_fd,
+            daq_init: crate::build_daq_init(proto, &project, &core.daq_lists),
             traceability: crate::traceability::traceability_lines(
                 &source_name,
                 &project,

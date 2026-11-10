@@ -158,24 +158,6 @@ impl CanIdSource {
             CanIdSource::Dynamic { assigned } => assigned.unwrap_or(default_id),
         }
     }
-
-    /// The id to send via `SET_DAQ_ID` for this list, if it needs one sent at all.
-    pub fn set_daq_id(&self) -> Option<u32> {
-        match *self {
-            CanIdSource::Dynamic { assigned: Some(id) } => Some(id),
-            _ => None,
-        }
-    }
-}
-
-impl From<Option<u32>> for CanIdSource {
-    /// A bare "fixed id, or none" source, as CCP's `CAN_ID_FIXED` declares it.
-    fn from(id: Option<u32>) -> Self {
-        match id {
-            Some(id) => CanIdSource::Fixed { id },
-            None => CanIdSource::Default,
-        }
-    }
 }
 
 /// Configuration of a single DAQ list as declared in a `/begin DAQ_LIST` block.

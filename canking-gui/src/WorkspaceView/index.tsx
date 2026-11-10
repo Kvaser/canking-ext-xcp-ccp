@@ -38,12 +38,12 @@ import {
   DEFAULT_TSCRIPT_OPTIONS,
   FORM_MAX_WIDTH,
   panelSx,
+  describeTransport,
   errorText,
-  formatBitrate,
+  formatHex,
+  parseBoundedInt,
   parseCanId,
   parseNonNegativeInt,
-  parseOptionalPositiveInt,
-  parsePrescaler,
   readA2lText,
   SignalEventMap,
   TriggerCondition,
@@ -68,7 +68,7 @@ function diagnosticText(d: Diagnostic): string {
       const event = d.val.event ? `event '${d.val.event}'` : 'no event';
       return (
         `Signal '${d.val.name}' could not be placed in any DAQ list ` +
-        `(${event}, ${d.val.size} bytes, address 0x${d.val.ecuAddress.toString(16).toUpperCase()})`
+        `(${event}, ${d.val.size} bytes, address ${formatHex(d.val.ecuAddress)})`
       );
     }
     case 'dropped-signal':
@@ -190,17 +190,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
       return signalEvents;
     }
     const known = new Set(measurableSignals.map(s => s.name));
-    const hasStale = Object.keys(signalEvents).some(name => !known.has(name));
-    if (!hasStale) {
-      return signalEvents;
-    }
-    const next: SignalEventMap = {};
-    for (const [name, event] of Object.entries(signalEvents)) {
-      if (known.has(name)) {
-        next[name] = event;
-      }
-    }
-    return next;
+    return Object.fromEntries(Object.entries(signalEvents).filter(([name]) => known.has(name)));
   }, [signalEvents, summary, measurableSignals]);
 
   // Protocols the loaded A2L declares, in canonical (preferred-first) order.
@@ -262,13 +252,10 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
 
   const onApply = useCallback(async () => {
     try {
-      const assignments = eventAssignments;
-
-      const dynamicIds = new Set(daqListPreview.filter(l => l.canId.tag === 'dynamic').map(l => l.id));
       const warningLines: string[] = [];
       const daqCanIdOverrides: [number, number][] = [];
       for (const list of daqListPreview) {
-        if (!dynamicIds.has(list.id)) continue;
+        if (list.canId.tag !== 'dynamic') continue;
         const raw = canIdOverrides[String(list.id)];
         if (raw === undefined || raw.trim() === '') continue;
         const parsed = parseCanId(raw);
@@ -280,13 +267,15 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
       }
 
       const daqPrescalers: [number, number][] = [];
-      for (const list of prescalerMax !== undefined ? daqListPreview : []) {
-        const raw = prescalers[String(list.id)] ?? '';
-        const parsed = parsePrescaler(raw, prescalerMax ?? 1);
-        if (parsed === null) {
-          warningLines.push(`DAQ list ${list.id}: invalid prescaler "${raw}", using 1 instead`);
-        } else if (parsed > 1) {
-          daqPrescalers.push([list.id, parsed]);
+      if (prescalerMax !== undefined) {
+        for (const list of daqListPreview) {
+          const raw = prescalers[String(list.id)] ?? '';
+          const parsed = parseBoundedInt(raw, 1, 1, prescalerMax);
+          if (parsed === null) {
+            warningLines.push(`DAQ list ${list.id}: invalid prescaler "${raw}", using 1 instead`);
+          } else if (parsed > 1) {
+            daqPrescalers.push([list.id, parsed]);
+          }
         }
       }
 
@@ -294,7 +283,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
         a2lFile.text,
         a2lFile.name,
         selectedSignals,
-        assignments,
+        eventAssignments,
         startDaq,
         daqCanIdOverrides,
         daqPrescalers,
@@ -309,12 +298,10 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
       const pretriggerMs = parseNonNegativeInt(tscriptOptions.pretriggerMs);
       const timerMs = tscriptOptions.timerStop ? parseNonNegativeInt(tscriptOptions.timerMs) : undefined;
       const maxCaptures = tscriptOptions.timerStop
-        ? parseOptionalPositiveInt(tscriptOptions.maxCaptures ?? DEFAULT_TSCRIPT_OPTIONS.maxCaptures ?? '')
+        ? parseBoundedInt(tscriptOptions.maxCaptures, undefined, 1)
         : undefined;
-      const daqWatchdogMs = parseOptionalPositiveInt(
-        tscriptOptions.watchdogMs ?? DEFAULT_TSCRIPT_OPTIONS.watchdogMs ?? '',
-      );
-      const stopCanIdText = (tscriptOptions.stopCanId ?? '').trim();
+      const daqWatchdogMs = parseBoundedInt(tscriptOptions.watchdogMs, undefined, 1);
+      const stopCanIdText = tscriptOptions.stopCanId.trim();
       const stopCanId = stopCanIdText === '' ? undefined : parseCanId(stopCanIdText);
       if (
         channelIndex === null ||
@@ -332,7 +319,7 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
             a2lFile.text,
             a2lFile.name,
             selectedSignals,
-            assignments,
+            eventAssignments,
             {
               channelIndex,
               pretriggerMs,
@@ -462,11 +449,9 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
     return null;
   }
 
-  const canApply =
-    a2lFile.text !== '' && summary?.ok !== undefined && selectedSignals.length > 0 && processorName.trim() !== '';
-
   const hasSummary = summary?.ok !== undefined;
   const hasSignals = selectedSignals.length > 0;
+  const canApply = hasSummary && hasSignals && processorName.trim() !== '';
 
   const stepDisabled = (index: number) => (index >= 1 && !hasSummary) || (index >= 2 && !hasSignals);
   const canGoNext = activeStep === 0 ? hasSummary : hasSignals;
@@ -558,181 +543,163 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
         >
           {/* Step 1 Load A2L, review info, choose protocol */}
           {activeStep === 0 && (
-            <>
-              <SectionControl text="A2L file">
-                <Box
-                  sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 2,
-                    my: 2,
-                    maxWidth: 560,
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Button
-                      variant={a2lFile.name === '' ? 'contained' : 'outlined'}
-                      onClick={() => fileInputRef.current?.click()}
-                      sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-                    >
-                      Load A2L…
-                    </Button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".a2l,.txt"
-                      hidden
-                      onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          void loadFile(file);
-                        }
-                        e.target.value = '';
-                      }}
-                    />
+            <SectionControl text="A2L file">
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 2,
+                  my: 2,
+                  maxWidth: 560,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Button
+                    variant={a2lFile.name === '' ? 'contained' : 'outlined'}
+                    onClick={() => fileInputRef.current?.click()}
+                    sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                  >
+                    Load A2L…
+                  </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".a2l,.txt"
+                    hidden
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        void loadFile(file);
+                      }
+                      e.target.value = '';
+                    }}
+                  />
+                  <Typography variant="body2" color="text.secondary">
+                    {a2lFile.name === ''
+                      ? 'No file loaded. Pick a file or drop one here. ' + 'It is kept in memory only.'
+                      : summary?.ok
+                        ? 'File parsed. Review the details below and pick the protocol.'
+                        : a2lFile.name}
+                  </Typography>
+                </Box>
+
+                {summary?.error !== undefined && <Alert severity="error">{summary.error}</Alert>}
+
+                {summary?.ok && (
+                  <Box
+                    sx={theme => ({
+                      ...panelSx(theme),
+                      p: 2,
+                      display: 'grid',
+                      gridTemplateColumns: 'auto 1fr',
+                      columnGap: 3,
+                      rowGap: 1,
+                      alignItems: 'center',
+                    })}
+                  >
                     <Typography variant="body2" color="text.secondary">
-                      {a2lFile.name === ''
-                        ? 'No file loaded. Pick a file or drop one here. ' + 'It is kept in memory only.'
-                        : summary?.ok
-                          ? 'File parsed. Review the details below and pick the protocol.'
-                          : a2lFile.name}
+                      File
+                    </Typography>
+                    <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                      {a2lFile.name}
+                    </Typography>
+
+                    <Typography variant="body2" color="text.secondary">
+                      Protocols
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      {detectedProtocols.map(p => (
+                        <Chip
+                          key={p}
+                          size="small"
+                          label={p.toUpperCase()}
+                          color={p === activeProtocol ? 'primary' : 'default'}
+                          variant={p === activeProtocol ? 'filled' : 'outlined'}
+                        />
+                      ))}
+                    </Box>
+
+                    <Typography variant="body2" color="text.secondary">
+                      Signals
+                    </Typography>
+                    <Typography variant="body2">{measurableSignals.length}</Typography>
+
+                    <Typography variant="body2" color="text.secondary">
+                      Events
+                    </Typography>
+                    <Typography variant="body2">{summary.ok.events.length}</Typography>
+
+                    <Typography variant="body2" color="text.secondary">
+                      Bus (from A2L)
+                    </Typography>
+                    <Typography variant="body2">
+                      {detectedTransport ? describeTransport(detectedTransport) : 'not declared'}
                     </Typography>
                   </Box>
+                )}
 
-                  {summary?.error !== undefined && <Alert severity="error">{summary.error}</Alert>}
-
-                  {summary?.ok && (
-                    <Box
-                      sx={theme => ({
-                        ...panelSx(theme),
-                        p: 2,
-                        display: 'grid',
-                        gridTemplateColumns: 'auto 1fr',
-                        columnGap: 3,
-                        rowGap: 1,
-                        alignItems: 'center',
-                      })}
-                    >
-                      <Typography variant="body2" color="text.secondary">
-                        File
-                      </Typography>
-                      <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                        {a2lFile.name}
-                      </Typography>
-
-                      <Typography variant="body2" color="text.secondary">
-                        Protocols
-                      </Typography>
-                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                        {detectedProtocols.map(p => (
-                          <Chip
-                            key={p}
-                            size="small"
-                            label={p.toUpperCase()}
-                            color={p === activeProtocol ? 'primary' : 'default'}
-                            variant={p === activeProtocol ? 'filled' : 'outlined'}
-                          />
-                        ))}
-                      </Box>
-
-                      <Typography variant="body2" color="text.secondary">
-                        Signals
-                      </Typography>
-                      <Typography variant="body2">{measurableSignals.length}</Typography>
-
-                      <Typography variant="body2" color="text.secondary">
-                        Events
-                      </Typography>
-                      <Typography variant="body2">{summary.ok.events.length}</Typography>
-
-                      <Typography variant="body2" color="text.secondary">
-                        Bus (from A2L)
-                      </Typography>
-                      <Typography variant="body2">
-                        {detectedTransport
-                          ? [
-                              detectedTransport.canFd ? 'CAN FD' : 'CAN',
-                              detectedTransport.bitrate !== undefined
-                                ? `${formatBitrate(detectedTransport.bitrate)} arb`
-                                : undefined,
-                              detectedTransport.canFd && detectedTransport.dataBitrate !== undefined
-                                ? `${formatBitrate(detectedTransport.dataBitrate)} data`
-                                : undefined,
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')
-                          : 'not declared'}
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {summary?.ok && summary.ok.unread.length > 0 && (
-                    <Alert severity="warning">
-                      This A2L uses keywords the configurator does not read, so some outputs may be wrong:
-                      <ul style={{ margin: 0, paddingLeft: 20 }}>
-                        {summary.ok.unread.map(u => (
-                          <li key={u.keyword}>
-                            <code>{u.keyword}</code>
-                            {u.count > 1 ? ` (${u.count}x)` : ''}: {u.effect}
-                          </li>
-                        ))}
-                      </ul>
-                    </Alert>
-                  )}
-
-                  {summary?.ok && detectedProtocols.length > 0 && (
-                    <TextField
-                      size="small"
-                      select
-                      label="Protocol"
-                      value={activeProtocol}
-                      onChange={e => setProtocol(e.target.value as Protocol)}
-                      sx={{ width: 240 }}
-                      helperText={
-                        detectedProtocols.length > 1
-                          ? 'Multiple protocols detected. Choose one'
-                          : 'Detected from the A2L IF_DATA block'
-                      }
-                    >
-                      {detectedProtocols.map(p => (
-                        <MenuItem key={p} value={p}>
-                          {p.toUpperCase()}
-                        </MenuItem>
+                {summary?.ok && summary.ok.unread.length > 0 && (
+                  <Alert severity="warning">
+                    This A2L uses keywords the configurator does not read, so some outputs may be wrong:
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>
+                      {summary.ok.unread.map(u => (
+                        <li key={u.keyword}>
+                          <code>{u.keyword}</code>
+                          {u.count > 1 ? ` (${u.count}x)` : ''}: {u.effect}
+                        </li>
                       ))}
-                    </TextField>
-                  )}
+                    </ul>
+                  </Alert>
+                )}
 
-                  {summary?.ok && (
-                    <Typography variant="caption" color="text.secondary">
-                      Loading a different A2L resets the steps below.
-                    </Typography>
-                  )}
-                </Box>
-              </SectionControl>
-            </>
+                {summary?.ok && detectedProtocols.length > 0 && (
+                  <TextField
+                    size="small"
+                    select
+                    label="Protocol"
+                    value={activeProtocol}
+                    onChange={e => setProtocol(e.target.value as Protocol)}
+                    sx={{ width: 240 }}
+                    helperText={
+                      detectedProtocols.length > 1
+                        ? 'Multiple protocols detected. Choose one'
+                        : 'Detected from the A2L IF_DATA block'
+                    }
+                  >
+                    {detectedProtocols.map(p => (
+                      <MenuItem key={p} value={p}>
+                        {p.toUpperCase()}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                )}
+
+                {summary?.ok && (
+                  <Typography variant="caption" color="text.secondary">
+                    Loading a different A2L resets the steps below.
+                  </Typography>
+                )}
+              </Box>
+            </SectionControl>
           )}
 
           {/* Step 2 Select signals */}
           {activeStep === 1 && summary?.ok && (
-            <>
-              <SignalTable
-                signals={summary.ok.signals}
-                groups={summary.ok.groups}
-                signalEvents={activeSignalEvents}
-                onSignalEventsChange={setSignalEvents}
-              />
-            </>
+            <SignalTable
+              signals={summary.ok.signals}
+              groups={summary.ok.groups}
+              signalEvents={activeSignalEvents}
+              onSignalEventsChange={setSignalEvents}
+            />
           )}
 
           {/* Step 3 Assign events */}
           {activeStep === 2 && summary?.ok && (
-            <>
-              <EventAssignTable
-                events={summary.ok.events}
-                signalEvents={activeSignalEvents}
-                onSignalEventsChange={setSignalEvents}
-              />
-            </>
+            <EventAssignTable
+              events={summary.ok.events}
+              signalEvents={activeSignalEvents}
+              onSignalEventsChange={setSignalEvents}
+            />
           )}
 
           {/* Step 4 Configure the generated t-script */}
@@ -766,11 +733,8 @@ function WorkspaceView({ id, height, width }: IExtensionWorkspaceViewProps) {
                   size="small"
                   label="Stop frame CAN id"
                   placeholder="none"
-                  value={tscriptOptions.stopCanId ?? ''}
-                  error={
-                    (tscriptOptions.stopCanId ?? '').trim() !== '' &&
-                    parseCanId(tscriptOptions.stopCanId ?? '') === null
-                  }
+                  value={tscriptOptions.stopCanId}
+                  error={tscriptOptions.stopCanId.trim() !== '' && parseCanId(tscriptOptions.stopCanId) === null}
                   helperText="Hex with 0x, or decimal"
                   onChange={e => setTscriptOptions({ ...tscriptOptions, stopCanId: e.target.value })}
                   sx={{ width: 240, mt: 2, mb: 1 }}

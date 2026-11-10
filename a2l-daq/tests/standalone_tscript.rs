@@ -1,29 +1,36 @@
 //! End-to-end: a standalone t-script built from a real A2L must be valid t source.
-#![cfg(feature = "tscript")]
 
 use a2l_daq::{
-    CanChannel, CompareOp, Comparison, MessageRef, SignalHook, TScriptConfig, TriggerAction,
-    TriggerCondition, build_daq_init, decoders_for, generate_tscript, inline_trigger_signals,
-    list_protocols, pipeline,
+    A2lProject, CanChannel, CompareOp, Comparison, CoreOutput, MessageRef, Protocol, SignalHook,
+    TScriptConfig, TriggerAction, TriggerCondition, build_daq_init, decoders_for, generate_tscript,
+    inline_trigger_signals, list_protocols, pipeline,
 };
 
 const SCC: &str = r"C:\Program Files (x86)\Kvaser\Canlib\Bin\scc.exe";
 const SAMPLE_CCP: &str = "data/CCP/SampleECU.a2l";
 
-fn build_script(triggers: &[(&str, &str, &str)]) -> String {
-    let bytes = std::fs::read(SAMPLE_CCP).expect("bundled A2L");
-    let text = a2l_daq::decode_a2l_bytes(&bytes);
-    let signal_names: Vec<String> = triggers.iter().map(|(s, _, _)| s.to_string()).collect();
-    let mut project = a2l_daq::parse_a2l(&text, &signal_names).expect("parse");
-    let protocol = list_protocols(&text).expect("protocols")[0];
+/// The text of a bundled A2L.
+fn read_a2l(path: &str) -> String {
+    a2l_daq::decode_a2l_bytes(&std::fs::read(path).expect("bundled A2L"))
+}
 
-    let assignments: Vec<(String, Vec<String>)> = a2l_daq::list_events(&text)
-        .unwrap_or_default()
-        .first()
-        .map(|e| vec![(e.name.clone(), signal_names.clone())])
-        .unwrap_or_default();
-    let core =
-        pipeline::build(&mut project, &assignments, protocol, "SampleECU.a2l").expect("core build");
+/// Parse `text` and run the pipeline with the signals of `groups[i]` on the A2L's `i`th XCP event, if it declares one.
+fn load(text: &str, groups: &[&[String]]) -> (A2lProject, Protocol, CoreOutput) {
+    let mut project = a2l_daq::parse_a2l(text, &groups.concat()).expect("parse");
+    let protocol = list_protocols(text).expect("protocols")[0];
+    let events = a2l_daq::list_events(text).unwrap_or_default();
+    let assignments: Vec<(String, Vec<String>)> = events
+        .iter()
+        .zip(groups)
+        .map(|(event, signals)| (event.name.clone(), signals.to_vec()))
+        .collect();
+    let core = pipeline::build(&mut project, &assignments, protocol, "src.a2l").expect("core");
+    (project, protocol, core)
+}
+
+fn build_script(triggers: &[(&str, &str, &str)]) -> String {
+    let signal_names: Vec<String> = triggers.iter().map(|(s, _, _)| s.to_string()).collect();
+    let (project, protocol, core) = load(&read_a2l(SAMPLE_CCP), &[&signal_names]);
 
     let can_id = a2l_daq::layout::daq_can_id(&project, protocol).expect("DAQ CAN id");
     let decoders = decoders_for(&project, &core.daq_lists, &signal_names, can_id)
@@ -42,11 +49,11 @@ fn build_script(triggers: &[(&str, &str, &str)]) -> String {
         max_captures: Some(3),
         daq_watchdog_ms: Some(2000),
         stop_can_id: Some(0x123),
-        channels: vec![CanChannel {
+        channel: CanChannel {
             index: 0,
             bitrate: 500_000,
             data_bitrate: None,
-        }],
+        },
         pretrigger_ms: 200,
         signals: vec![SignalHook {
             stop: Some(TriggerCondition {
@@ -70,8 +77,7 @@ fn build_script(triggers: &[(&str, &str, &str)]) -> String {
             handles_responses: true,
         }],
         timer_ms: Some(8000),
-        daq_init: build_daq_init(protocol, &project, &core.daq_lists, 1000),
-        can_fd: false,
+        daq_init: build_daq_init(protocol, &project, &core.daq_lists),
         traceability: a2l_daq::traceability_lines(
             "SampleECU.a2l",
             &project,
@@ -83,29 +89,36 @@ fn build_script(triggers: &[(&str, &str, &str)]) -> String {
     generate_tscript(&config)
 }
 
-fn compile(source: &str, stem: &str) -> Result<Option<String>, String> {
+/// Compile `source` with scc, against `dbc` when given, and assert it succeeds. Skipped when scc isn't installed.
+///
+/// The `.t`/`.dbc` files stay in the temp dir for inspection.
+fn assert_compiles(source: &str, stem: &str, dbc: Option<&str>) {
     if !std::path::Path::new(SCC).exists() {
-        return Ok(None);
+        eprintln!("scc.exe not installed; skipped the compile check");
+        return;
     }
     let dir = std::env::temp_dir().join("a2l-daq-standalone-tscript");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{stem}.t"));
-    std::fs::write(&path, source).map_err(|e| e.to_string())?;
+    std::fs::write(&path, source).unwrap();
 
-    let out = std::process::Command::new(SCC)
-        .arg(&path)
-        .current_dir(&dir)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut scc = std::process::Command::new(SCC);
+    if let Some(dbc) = dbc {
+        let dbc_path = dir.join(format!("{stem}.dbc"));
+        std::fs::write(&dbc_path, dbc).unwrap();
+        scc.arg(format!("-dbase={}", dbc_path.display()));
+    }
+    let out = scc.arg(&path).current_dir(&dir).output().expect("run scc");
     let log = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    if !out.status.success() {
-        return Err(log);
-    }
-    Ok(Some(log))
+    assert!(
+        out.status.success() && log.contains("Compilation succeeded"),
+        "{} does not compile:\n{log}",
+        path.display()
+    );
 }
 
 #[test]
@@ -140,29 +153,14 @@ fn standalone_script_from_a_real_a2l_compiles_without_a_database() {
     );
     assert!(source.contains("    switch (state) {"), "got:\n{source}");
 
-    match compile(&source, "standaln") {
-        Ok(None) => eprintln!("scc.exe not installed; skipped the compile check"),
-        Ok(Some(log)) => assert!(
-            log.contains("Compilation succeeded"),
-            "scc did not report success:\n{log}"
-        ),
-        Err(log) => panic!("generated script does not compile:\n{log}\n--- source ---\n{source}"),
-    }
+    assert_compiles(&source, "standaln", None);
 }
 
 #[test]
 fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
-    let bytes = std::fs::read(SAMPLE_CCP).expect("bundled A2L");
-    let text = a2l_daq::decode_a2l_bytes(&bytes);
+    let text = read_a2l(SAMPLE_CCP);
     let names = a2l_daq::list_signal_names(&text).expect("signal names");
-    let mut project = a2l_daq::parse_a2l(&text, &names).expect("parse");
-    let protocol = list_protocols(&text).expect("protocols")[0];
-    let assignments: Vec<(String, Vec<String>)> = a2l_daq::list_events(&text)
-        .unwrap_or_default()
-        .first()
-        .map(|e| vec![(e.name.clone(), names.clone())])
-        .unwrap_or_default();
-    let core = pipeline::build(&mut project, &assignments, protocol, "src.a2l").expect("core");
+    let (project, protocol, core) = load(&text, &[&names]);
 
     let placed: Vec<String> = a2l_daq::layout::daq_layout(&project, &core.daq_lists)
         .into_iter()
@@ -210,11 +208,11 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
-        channels: vec![CanChannel {
+        channel: CanChannel {
             index: 0,
             bitrate: 500_000,
             data_bitrate: None,
-        }],
+        },
         pretrigger_ms: 0,
         signals: vec![SignalHook {
             stop: None,
@@ -231,7 +229,6 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         }],
         timer_ms: None,
         daq_init: None,
-        can_fd: false,
         traceability: vec![],
         decoders,
     };
@@ -253,18 +250,10 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         "the exponent check must actually catch one"
     );
 
-    match compile(&source, "allsigs") {
-        Ok(None) => eprintln!("scc.exe not installed; skipped the compile check"),
-        Ok(Some(log)) => assert!(
-            log.contains("Compilation succeeded"),
-            "scc did not report success:\n{log}"
-        ),
-        Err(log) => panic!("generated script does not compile:\n{log}"),
-    }
+    assert_compiles(&source, "allsigs", None);
 }
 
-/// Builds a synthetic CCP A2L text with `count` measurements, all on one raster, so DAQ init
-/// codegen can be stress-tested at a scale no committed example file needs to carry.
+/// Builds a synthetic CCP A2L text with `count` measurements, all on one raster, so DAQ init codegen can be stress-tested
 fn synthetic_ccp_a2l(count: usize) -> String {
     let mut text = String::from(
         r#"
@@ -298,16 +287,9 @@ fn synthetic_ccp_a2l(count: usize) -> String {
 fn daq_init_compiles_with_thousands_of_states() {
     let text = synthetic_ccp_a2l(1200);
     let names = a2l_daq::list_signal_names(&text).expect("signal names");
-    let mut project = a2l_daq::parse_a2l(&text, &names).expect("parse");
-    let protocol = list_protocols(&text).expect("protocols")[0];
-    let assignments: Vec<(String, Vec<String>)> = a2l_daq::list_events(&text)
-        .unwrap_or_default()
-        .first()
-        .map(|e| vec![(e.name.clone(), names.clone())])
-        .unwrap_or_default();
-    let core = pipeline::build(&mut project, &assignments, protocol, "src.a2l").expect("core");
+    let (project, protocol, core) = load(&text, &[&names]);
 
-    let init = build_daq_init(protocol, &project, &core.daq_lists, 1000)
+    let init = build_daq_init(protocol, &project, &core.daq_lists)
         .expect("synthetic file declares CCP transport ids");
     let states = init.commands.len();
     assert!(
@@ -320,11 +302,11 @@ fn daq_init_compiles_with_thousands_of_states() {
         stop_can_id: None,
         max_captures: None,
         daq_watchdog_ms: None,
-        channels: vec![CanChannel {
+        channel: CanChannel {
             index: 0,
             bitrate: 500_000,
             data_bitrate: None,
-        }],
+        },
         pretrigger_ms: 0,
         signals: vec![SignalHook {
             stop: None,
@@ -337,7 +319,6 @@ fn daq_init_compiles_with_thousands_of_states() {
         }],
         timer_ms: None,
         daq_init: Some(init),
-        can_fd: false,
         traceability: vec![],
         decoders: vec![],
     };
@@ -350,12 +331,64 @@ fn daq_init_compiles_with_thousands_of_states() {
         "one break per case"
     );
 
-    match compile(&source, "manystat") {
-        Ok(None) => eprintln!("scc.exe not installed; skipped the compile check"),
-        Ok(Some(log)) => assert!(
-            log.contains("Compilation succeeded"),
-            "scc did not report success:\n{log}"
-        ),
-        Err(log) => panic!("{states}-state init does not compile:\n{log}"),
-    }
+    assert_compiles(&source, "manystat", None);
+}
+
+#[test]
+fn dbc_mode_script_with_two_daq_messages_compiles_against_its_dbc() {
+    let signals = ["EngineSpeed_rpm", "VehicleSpeed_kmh"].map(String::from);
+    // One signal per event: two DAQ lists.
+    let (project, protocol, mut core) = load(
+        &read_a2l("data/XCP/SampleECU.a2l"),
+        &[&signals[..1], &signals[1..]],
+    );
+    assert_eq!(core.daq_lists.len(), 2);
+    // A second DAQ message: the DBC then names both `DAQ_<id>` instead of `DAQ`.
+    core.daq_lists[1].can_id = a2l_daq::CanIdSource::Fixed { id: 0x7E0 };
+    let dbc = a2l_daq::create_dbc_file(&project, &core.daq_lists, protocol, "SampleECU.a2l")
+        .expect("DBC");
+
+    let default_id = a2l_daq::layout::daq_can_id(&project, protocol).expect("DAQ CAN id");
+    let trigger = a2l_daq::build_trigger(
+        "EngineSpeed_rpm.Phys > 2000 && VehicleSpeed_kmh.Phys >= 0.5",
+        false,
+        &project,
+        &core.daq_lists,
+        default_id,
+    )
+    .expect("trigger");
+    let signals = a2l_daq::resolve_signal_hooks(
+        false,
+        &project,
+        &core.daq_lists,
+        protocol,
+        Some((&trigger, TriggerAction::StartLogger)),
+        None,
+    )
+    .expect("DBC hooks");
+    let bus = a2l_daq::bus_defaults(&project, protocol);
+    let config = TScriptConfig {
+        max_captures: Some(2),
+        daq_watchdog_ms: Some(2000),
+        stop_can_id: None,
+        channel: CanChannel {
+            index: 0,
+            bitrate: bus.bitrate,
+            data_bitrate: bus.can_fd_data_bitrate,
+        },
+        pretrigger_ms: 200,
+        signals,
+        timer_ms: Some(8000),
+        daq_init: build_daq_init(protocol, &project, &core.daq_lists),
+        traceability: Vec::new(),
+        decoders: Vec::new(),
+    };
+    let source = generate_tscript(&config);
+    assert!(
+        !source.contains("<*> DAQ {"),
+        "hooks a message the DBC lacks:
+{source}"
+    );
+
+    assert_compiles(&source, "dbc2msg", Some(&dbc));
 }

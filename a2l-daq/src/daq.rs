@@ -20,6 +20,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 // Re export the protocol-core types
 pub use protocol_core::types::{DaqList, Odt, OdtEntry};
 
+/// ODT payload on classic CAN: 8 data bytes minus the PID byte.
+const CLASSIC_ODT_MAX_BYTES: u16 = 7;
+
 // Temporary struct used during packing
 #[derive(Debug, Clone)]
 struct Candidate {
@@ -50,8 +53,6 @@ pub fn build_daq_list(
     project: &A2lProject,
     protocol: Protocol,
 ) -> (Vec<DaqList>, Vec<ParsedSignal>) {
-    const DEFAULT_ODT_MAX_BYTES: u16 = 7; // Classic CAN payload minus the PID byte
-
     if protocol == Protocol::Ccp {
         return build_daq_list_ccp(project.signals.clone(), project.ccp_data.as_ref());
     }
@@ -75,21 +76,17 @@ pub fn build_daq_list(
     // MAX_DTO from PROTOCOL_LAYER takes precedence; fall back to CAN-FD DLC or the classic CAN default.
     let protocol_max_dto = xcp
         .and_then(|x| x.protocol_layer.as_ref())
-        .filter(|p| p.max_dto > 0)
         .map(|p| p.max_dto);
     let can_fd_max_dlc = xcp
         .and_then(|x| x.xcp_info.as_ref())
         .and_then(|c| c.can_fd.as_ref())
         .map(|fd| fd.max_dlc);
-    let odt_max_bytes = protocol_max_dto
-        .map(|dto| dto.saturating_sub(1))
-        .filter(|&b| b > 0)
-        .or_else(|| {
-            can_fd_max_dlc
-                .map(|dlc| dlc.saturating_sub(1))
-                .filter(|&b| b > 0)
-        })
-        .unwrap_or(DEFAULT_ODT_MAX_BYTES);
+    let odt_max_bytes = [protocol_max_dto, can_fd_max_dlc]
+        .into_iter()
+        .flatten()
+        .map(|frame| frame.saturating_sub(1))
+        .find(|&b| b > 0)
+        .unwrap_or(CLASSIC_ODT_MAX_BYTES);
 
     // DAQ mode check
     let limits = PackLimits {
@@ -116,8 +113,6 @@ fn build_daq_list_ccp(
     signals: Vec<ParsedSignal>,
     ccp: Option<&CcpData>,
 ) -> (Vec<DaqList>, Vec<ParsedSignal>) {
-    const CCP_ODT_MAX_BYTES: u16 = 7;
-
     let rasters = ccp.map(|c| c.rasters.as_slice()).unwrap_or_default();
     let sources = ccp.map(|c| c.sources.as_slice()).unwrap_or_default();
 
@@ -153,14 +148,15 @@ fn build_daq_list_ccp(
             max_odt_entries: 0,
             event_fixed: None,
             first_pid: hint.first_pid,
-            can_id: CanIdSource::from(can_id),
+            // CCP's `CAN_ID_FIXED`, or the transport's shared id.
+            can_id: can_id.map_or(CanIdSource::Default, |id| CanIdSource::Fixed { id }),
         });
         pack_event_group(
             event,
             group_signals,
             &mut group_iter,
             PackLimits {
-                odt_max_bytes: CCP_ODT_MAX_BYTES,
+                odt_max_bytes: CLASSIC_ODT_MAX_BYTES,
                 max_odt_entry_size: 0,
                 timestamp_reserved: 0,
                 granularity: 1,
@@ -200,18 +196,7 @@ fn build_daq_list_with_packing(
     let mut lists: Vec<DaqList> = Vec::new();
     let mut unplaced: Vec<ParsedSignal> = Vec::new();
 
-    let pid_decls: HashMap<u16, PidDecl> = available_daq
-        .iter()
-        .map(|d| {
-            (
-                d.identifier,
-                PidDecl {
-                    first_pid: d.first_pid,
-                    reserved_odts: None,
-                },
-            )
-        })
-        .collect();
+    let pid_decls = pid_decls(&available_daq, false);
     let mut daq_iter = available_daq.into_iter();
 
     for (event, group_signals) in group_by_event(signals) {
@@ -242,18 +227,7 @@ fn build_daq_list_static(
     let mut unplaced: Vec<ParsedSignal> = Vec::new();
     let mut used: HashSet<u16> = HashSet::new();
 
-    let pid_decls: HashMap<u16, PidDecl> = available_daq
-        .iter()
-        .map(|d| {
-            (
-                d.identifier,
-                PidDecl {
-                    first_pid: d.first_pid,
-                    reserved_odts: (d.nr_odt > 0).then_some(d.nr_odt),
-                },
-            )
-        })
-        .collect();
+    let pid_decls = pid_decls(&available_daq, true);
 
     for (event, group_signals) in group_by_event(signals) {
         // Resolve the event channel this group belongs to.
@@ -297,6 +271,19 @@ fn build_daq_list_static(
     (lists, unplaced)
 }
 
+/// What the A2L declares about each list's PIDs; with `reserves`, a list's `MAX_ODT` reserves that many.
+fn pid_decls(defs: &[DaqListDef], reserves: bool) -> HashMap<u16, PidDecl> {
+    defs.iter()
+        .map(|d| {
+            let decl = PidDecl {
+                first_pid: d.first_pid,
+                reserved_odts: (reserves && d.nr_odt > 0).then_some(d.nr_odt),
+            };
+            (d.identifier, decl)
+        })
+        .collect()
+}
+
 /// Group signals by their assigned event
 fn group_by_event(signals: Vec<ParsedSignal>) -> BTreeMap<Option<String>, Vec<ParsedSignal>> {
     let mut groups: BTreeMap<Option<String>, Vec<ParsedSignal>> = BTreeMap::new();
@@ -308,8 +295,7 @@ fn group_by_event(signals: Vec<ParsedSignal>) -> BTreeMap<Option<String>, Vec<Pa
 
 /// The size limits packing has to respect, the same for every event group in one run.
 ///
-/// A zero `max_odt_entry_size` means the A2L declares no per-entry granularity, in which
-/// case an entry may span a whole ODT.
+/// A zero `max_odt_entry_size` means the A2L declares no per-entry granularity, in which case an entry may span a whole ODT.
 #[derive(Debug, Clone, Copy)]
 struct PackLimits {
     /// Payload bytes one ODT may hold: the transport frame limit minus the PID byte.
@@ -372,11 +358,7 @@ fn pack_event_group(
         } else {
             usize::MAX
         };
-        let max_entries_per_odt = if daq_def.max_odt_entries > 0 {
-            daq_def.max_odt_entries as usize
-        } else {
-            0
-        };
+        let max_entries_per_odt = daq_def.max_odt_entries as usize;
 
         // Split oversized signals into chunks of whole granules
         let candidates: Vec<Candidate> = group_signals
@@ -476,28 +458,21 @@ fn split_signal(
 /// Granule-aligned candidates can overlap, e.g. two bytes inside one DWORD.
 fn merge_contiguous(mut candidates: Vec<Candidate>, max_size: u16) -> Vec<Candidate> {
     // Entries never mix extensions, but an ODT or DAQ list still may; enforce A2L `ADDRESS_EXTENSION_ODT`/`_DAQ` in packing if an ECU declares it.
-    if candidates.is_empty() {
-        return candidates;
-    }
-    // Sort by address
     candidates.sort_by_key(|c| (c.address_extension, c.ecu_address));
     let end = |c: &Candidate| c.ecu_address + c.size as u64;
-    let mut merged: Vec<Candidate> = Vec::new();
-    let mut current = candidates.remove(0);
-    for next in candidates {
-        let touches = current.address_extension == next.address_extension
-            && next.ecu_address <= end(&current);
-        let merged_size = end(&current).max(end(&next)) - current.ecu_address;
-        if touches && merged_size <= max_size as u64 {
+    // `next` merges into the entry before it, `current`, or starts a new one.
+    candidates.dedup_by(|next, current| {
+        let merged_size = end(current).max(end(next)) - current.ecu_address;
+        let merge = current.address_extension == next.address_extension
+            && next.ecu_address <= end(current)
+            && merged_size <= max_size as u64;
+        if merge {
             current.size = merged_size as u16;
-            current.names.extend(next.names);
-        } else {
-            merged.push(current);
-            current = next;
+            current.names.append(&mut next.names);
         }
-    }
-    merged.push(current);
-    merged
+        merge
+    });
+    candidates
 }
 
 /// First Fit Decreasing bin-packing of candidates into ODTs.
@@ -538,24 +513,17 @@ fn pack_ffd(
             *cap >= candidate.size
                 && (max_entries_per_odt == 0 || bin_entries.len() < max_entries_per_odt)
         });
+        let entry = OdtEntry {
+            names: candidate.names,
+            ecu_address: candidate.ecu_address,
+            size: candidate.size,
+        };
 
         if let Some((bin_entries, cap)) = placed {
-            *cap -= candidate.size;
-            bin_entries.push(OdtEntry {
-                names: candidate.names,
-                ecu_address: candidate.ecu_address,
-                size: candidate.size,
-            });
+            *cap -= entry.size;
+            bin_entries.push(entry);
         } else if bins.len() < max_odts {
-            let cap = odt_max_bytes - candidate.size;
-            bins.push((
-                vec![OdtEntry {
-                    names: candidate.names,
-                    ecu_address: candidate.ecu_address,
-                    size: candidate.size,
-                }],
-                cap,
-            ));
+            bins.push((vec![entry], odt_max_bytes - candidate.size));
         } else {
             failed_signal_indices.insert(candidate.signal_index);
         }
@@ -1209,27 +1177,16 @@ mod tests {
 
     #[test]
     fn signal_after_a_merged_tail_chunk_decodes_from_its_own_bytes() {
-        let sig = |name: &str, ecu_address, size| ParsedSignal {
-            name: name.into(),
-            ecu_address,
-            size,
-            event: Some("E".into()),
-            ..Default::default()
-        };
         // Big splits 7+3 on classic CAN; its 3-byte tail is adjacent to Next and merges with it.
         let project = A2lProject {
-            signals: vec![sig("Big", 0x100, 10), sig("Next", 0x10A, 2)],
+            signals: vec![sig("Big", 0x100, 10, "E"), sig("Next", 0x10A, 2, "E")],
             xcp_data: xcp_with_daq_lists(vec![unlimited_daq(0)]),
             ..Default::default()
         };
         let (lists, unplaced) = build_daq_list(&project, Protocol::Xcp);
         assert!(unplaced.is_empty());
         assert!(
-            lists[0]
-                .odts
-                .iter()
-                .flat_map(|o| &o.entries)
-                .any(|e| e.names.len() == 2),
+            entries(&lists[0]).iter().any(|e| e.names.len() == 2),
             "precondition: the tail chunk merged with Next"
         );
         assert_layout_matches_packing(&project, &lists);
@@ -1237,37 +1194,26 @@ mod tests {
 
     #[test]
     fn entries_are_whole_granules_and_still_decode_correctly() {
-        let sig = |name: &str, ecu_address, size| ParsedSignal {
-            name: name.into(),
-            ecu_address,
-            size,
-            event: Some("E".into()),
-            ..Default::default()
-        };
         let mut xcp = xcp_with_daq_lists_and_entry_size(vec![unlimited_daq(0)], 6);
         xcp.as_mut().unwrap().daq_info.odt_entry_granularity = 4;
         let project = A2lProject {
             signals: vec![
-                sig("Byte", 0x10, 1),
-                sig("Three", 0x20, 3),
-                sig("Big", 0x40, 9),  // split at floor(6, 4) = 4: 4 + 4 + 1
-                sig("Tail", 0x49, 2), // shares Big's last granule
-                sig("Odd", 0x51, 1),  // unaligned: sampled as the DWORD at 0x50
-                sig("PairA", 0x61, 1),
-                sig("PairB", 0x62, 1), // same DWORD as PairA
-                sig("Word", 0x72, 2),
+                sig("Byte", 0x10, 1, "E"),
+                sig("Three", 0x20, 3, "E"),
+                sig("Big", 0x40, 9, "E"), // split at floor(6, 4) = 4: 4 + 4 + 1
+                sig("Tail", 0x49, 2, "E"), // shares Big's last granule
+                sig("Odd", 0x51, 1, "E"), // unaligned: sampled as the DWORD at 0x50
+                sig("PairA", 0x61, 1, "E"),
+                sig("PairB", 0x62, 1, "E"), // same DWORD as PairA
+                sig("Word", 0x72, 2, "E"),
             ],
             xcp_data: xcp,
             ..Default::default()
         };
         let (lists, unplaced) = build_daq_list(&project, Protocol::Xcp);
         assert!(unplaced.is_empty(), "{unplaced:?}");
-        let entries: Vec<&crate::OdtEntry> = lists
-            .iter()
-            .flat_map(|l| &l.odts)
-            .flat_map(|o| &o.entries)
-            .collect();
-        for e in &entries {
+        let all: Vec<&crate::OdtEntry> = lists.iter().flat_map(entries).collect();
+        for e in &all {
             assert_eq!(
                 (e.ecu_address % 4, e.size % 4),
                 (0, 0),
@@ -1276,10 +1222,9 @@ mod tests {
             assert!(e.size <= 4, "max entry 6 floors to one DWORD: {e:?}");
         }
         assert!(
-            entries
-                .iter()
+            all.iter()
                 .any(|e| e.names == ["PairA", "PairB"] && e.ecu_address == 0x60),
-            "{entries:?}"
+            "{all:?}"
         );
         assert_layout_matches_packing(&project, &lists);
     }
@@ -1294,15 +1239,13 @@ mod tests {
             ..Default::default()
         };
         let (lists, _) = build_daq_list(&project, Protocol::Xcp);
-        let mut entries: Vec<(u64, u16, Vec<String>)> = lists[0]
-            .odts
-            .iter()
-            .flat_map(|o| &o.entries)
+        let mut got: Vec<(u64, u16, Vec<String>)> = entries(&lists[0])
+            .into_iter()
             .map(|e| (e.ecu_address, e.size, e.names.clone()))
             .collect();
-        entries.sort();
+        got.sort();
         assert_eq!(
-            entries,
+            got,
             vec![
                 (0x100, 4, vec!["F[0]".to_string()]),
                 (0x104, 4, vec!["F[1]".to_string()])
@@ -1333,15 +1276,13 @@ mod tests {
             ..Default::default()
         };
         let (lists, _) = build_daq_list(&project, Protocol::Xcp);
-        let mut entries: Vec<Vec<String>> = lists[0]
-            .odts
-            .iter()
-            .flat_map(|o| &o.entries)
+        let mut got: Vec<Vec<String>> = entries(&lists[0])
+            .into_iter()
             .map(|e| e.names.clone())
             .collect();
-        entries.sort();
+        got.sort();
         assert_eq!(
-            entries,
+            got,
             vec![vec!["A".to_string()], vec!["B".into(), "C".into()]]
         );
     }

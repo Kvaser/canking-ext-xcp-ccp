@@ -5,9 +5,10 @@
 //! latched values rather than reading in place. This module resolves the reads against the
 //! DAQ layout and renders the latch/condition fragments `super::emit` drops into the hook.
 
-use super::inline_signals::{self, SignalDecoder, TriggerError};
+use super::inline_signals::{SignalDecoder, TriggerError};
 use crate::a2l::A2lProject;
 use crate::daq::DaqList;
+use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 
 /// Struct representing a trigger condition for starting or stopping the logger
@@ -57,15 +58,7 @@ impl CompareOp {
     pub const ALL: [Self; 6] = [Self::Ge, Self::Le, Self::Eq, Self::Ne, Self::Gt, Self::Lt];
 
     pub fn from_symbol(s: &str) -> Option<Self> {
-        Some(match s {
-            ">" => Self::Gt,
-            ">=" => Self::Ge,
-            "<" => Self::Lt,
-            "<=" => Self::Le,
-            "==" => Self::Eq,
-            "!=" => Self::Ne,
-            _ => return None,
-        })
+        Self::ALL.into_iter().find(|op| op.symbol() == s)
     }
 
     pub fn symbol(self) -> &'static str {
@@ -160,39 +153,9 @@ pub fn inline_trigger_signals(decoders: &[SignalDecoder]) -> Vec<TriggerSignal> 
         .collect()
 }
 
-/// The signals a trigger reads, plus the decoders a standalone script needs to read them.
-/// Empty decoders mean the script reads through the DBC instead.
-pub type TriggerParts = (Vec<TriggerSignal>, Vec<SignalDecoder>);
-
-/// Resolve a trigger's reads against the DAQ layout. `default_can_id` is only used inline,
-/// to resolve a list's CAN id when it declares no override of its own.
-pub fn resolve_trigger(
-    project: &A2lProject,
-    daq_lists: &[DaqList],
-    reads: &[(String, Accessor)],
-    inline: bool,
-    default_can_id: u32,
-) -> Result<TriggerParts, TriggerError> {
-    if !inline {
-        return Ok((dbc_trigger_signals(project, daq_lists, reads)?, Vec::new()));
-    }
-    debug_assert!(
-        reads.iter().all(|(_, a)| *a == Accessor::Phys),
-        "inline decoders yield physical values; callers must normalise reads first"
-    );
-    let names: Vec<String> = reads.iter().map(|(name, _)| name.clone()).collect();
-    let decoders = inline_signals::decoders_for(project, daq_lists, &names, default_can_id)?;
-    let signals = inline_trigger_signals(&decoders);
-    Ok((signals, decoders))
-}
-
 /// The latch and seen-flag globals, for the `variables` block.
 ///
-/// Latches are `float` because the t language has no `double` and a physical value is
-/// generally fractional. That costs precision above 2^24 on wide integers, so a `.Raw`
-/// comparison against a 32-bit counter is approximate in its top bits. Physical values are
-/// unaffected in practice, and the inline decoders already widen unsigned 32-bit fields
-/// through a float for the same reason.
+/// Latches are `float` because the t language has no `double` and a physical value is generally fractional.
 pub(super) fn latch_variables(signals: &[TriggerSignal]) -> String {
     let mut out = String::new();
     for s in signals {
@@ -227,18 +190,16 @@ pub(super) fn latch_block(signals: &[TriggerSignal], indent: &str) -> String {
 }
 
 pub(super) fn condition_expression(trigger: &TriggerCondition) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
-    for ident in trigger.comparisons.iter().map(|c| c.ident.as_str()) {
-        if !seen.contains(&ident) {
-            seen.push(ident);
-            parts.push(format!("got_{ident} == 1"));
-        }
-    }
-    for c in &trigger.comparisons {
-        parts.push(format!("val_{} {} {}", c.ident, c.op.symbol(), c.value));
-    }
-    parts.join(" && ")
+    let comparisons = &trigger.comparisons;
+    let mut seen = HashSet::new();
+    let gates = comparisons
+        .iter()
+        .filter(|c| seen.insert(&c.ident))
+        .map(|c| format!("got_{} == 1", c.ident));
+    let compares = comparisons
+        .iter()
+        .map(|c| format!("val_{} {} {}", c.ident, c.op.symbol(), c.value));
+    gates.chain(compares).collect::<Vec<_>>().join(" && ")
 }
 
 #[derive(Clone, Copy)]

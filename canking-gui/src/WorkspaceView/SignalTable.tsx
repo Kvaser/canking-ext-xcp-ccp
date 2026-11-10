@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { GroupInfo, SignalSummary } from '../a2l-daq-wasm/interfaces/kvaser-a2l-daq-generator.js';
-import { panelSx, SignalEventMap } from './util';
+import { formatHex, panelSx, SignalEventMap } from './util';
 
 const ROW_HEIGHT = 40;
 const ALL_GROUPS = '';
@@ -31,10 +31,6 @@ const COL_ADDRESS_WIDTH = '11%';
 const COL_SIZE_WIDTH = '7%';
 
 const MAX_VISIBLE_GROUPS = 2;
-
-function formatAddress(address: bigint): string {
-  return `0x${address.toString(16).toUpperCase()}`;
-}
 
 /// Group names in ROOT/SUB_GROUP tree order, each paired with its depth for indentation.
 function groupOptions(groups: GroupInfo[]): { name: string; depth: number }[] {
@@ -161,7 +157,7 @@ const SignalRow = memo(function SignalRow({
           </Typography>
         ) : (
           <Tooltip title={signal.virtualInput ? `computed from ${signal.virtualInput}` : ''} placement="left">
-            <span>{formatAddress(signal.ecuAddress)}</span>
+            <span>{formatHex(signal.ecuAddress)}</span>
           </Tooltip>
         )}
       </TableCell>
