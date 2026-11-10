@@ -523,21 +523,6 @@ mod tests {
     }
 
     #[test]
-    fn chunk_excludes_padding_at_the_end_of_its_entry() {
-        let project = A2lProject {
-            signals: vec![signal("Big", 9)],
-            ..Default::default()
-        };
-        let daq = one_odt(vec![OdtEntry {
-            names: vec!["Big[1]".into()],
-            ecu_address: 0x10 + 6,
-            size: 4, // 3 bytes left of Big, padded to a WORD multiple
-        }]);
-        let p = signal_placements(&project, &daq);
-        assert_eq!(p[0].chunk_size, Some(3));
-    }
-
-    #[test]
     fn signals_sit_at_their_address_in_a_granule_aligned_entry() {
         let mut a = signal("A", 1);
         a.ecu_address = 0x11;

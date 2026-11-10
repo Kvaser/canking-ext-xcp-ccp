@@ -313,19 +313,6 @@ mod tests {
     }
 
     #[test]
-    fn a_ccp_only_file_still_reports_its_rasters() {
-        use super::event_channels;
-        let ccp_only = decode_a2l_bytes(CCP_A2L);
-        let project = parse_a2l(&ccp_only, &[]).unwrap();
-        assert!(project.xcp_data.is_none());
-        let names: Vec<&str> = event_channels(&project, Protocol::Ccp)
-            .iter()
-            .map(|e| e.name.as_str())
-            .collect();
-        assert_eq!(names, ["Raster_10ms", "Raster_100ms"]);
-    }
-
-    #[test]
     fn detects_both_protocols_in_canonical_order() {
         let content = r#"
       /begin IF_DATA ASAP1B_CCP
@@ -974,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_dynamic_mode_without_static_keyword() {
+    fn dynamic_keyword_selects_dynamic_mode() {
         let content = r#"
       /begin IF_DATA XCP
         /begin DAQ

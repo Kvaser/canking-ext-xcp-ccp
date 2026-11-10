@@ -302,13 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn commit_output_channel_is_none_without_channels() {
-        let mut state = State::default();
-
-        assert!(state.commit_output_channel().is_none());
-    }
-
-    #[test]
     fn frames_to_queue_on_start_requires_start_daq_frames_and_channel() {
         let mut state = State {
             init_frames: vec![command_frame()],

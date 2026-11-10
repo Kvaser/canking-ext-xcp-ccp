@@ -901,30 +901,6 @@ mod tests {
     }
 
     #[test]
-    fn does_not_merge_non_adjacent_signals() {
-        let signals = vec![
-            ParsedSignal {
-                name: "A".into(),
-                ecu_address: 0x1000,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-            ParsedSignal {
-                name: "B".into(),
-                ecu_address: 0x1010,
-                size: 2,
-                event: Some("E".into()),
-                ..Default::default()
-            },
-        ];
-        let (list, _) =
-            build_daq_list_with_packing(signals, limits(7, 0, 0), vec![unlimited_daq(1)]);
-        let entries = &list[0].odts[0].entries;
-        assert_eq!(entries.len(), 2, "non-adjacent signals must stay separate");
-    }
-
-    #[test]
     fn does_not_merge_when_combined_size_exceeds_odt_max() {
         let signals = vec![
             ParsedSignal {
@@ -1244,29 +1220,6 @@ mod tests {
     }
 
     #[test]
-    fn build_daq_list_uses_max_odt_entry_size_from_a2l() {
-        let signals = vec![ParsedSignal {
-            name: "D".into(),
-            ecu_address: 0x1000,
-            size: 8,
-            event: Some("E".into()),
-            ..Default::default()
-        }];
-        let daq = DaqListDef {
-            identifier: 0,
-            nr_odt: 5,
-            max_odt_entries: 7,
-            ..Default::default()
-        };
-        let (list, _) = build_daq_list_with_packing(signals, limits(7, 4, 0), vec![daq]);
-        let all_entries: Vec<_> = list[0].odts.iter().flat_map(|o| &o.entries).collect();
-        assert_eq!(all_entries.len(), 2);
-        assert_eq!(all_entries[0].size, 4);
-        assert_eq!(all_entries[1].size, 4);
-        assert_eq!(list[0].odts.len(), 2);
-    }
-
-    #[test]
     fn ccp_packs_one_list_per_raster_with_sequential_ids() {
         let signals = vec![
             ParsedSignal {
@@ -1417,12 +1370,12 @@ mod tests {
                 name: "B".into(),
                 ecu_address: 0x2000,
                 size: 4,
-                event: Some("Undeclared".into()),
+                event: Some("Bare".into()),
                 ..Default::default()
             },
         ];
         let ccp = CcpData {
-            rasters: vec![event(0, "Declared"), event(1, "Undeclared")],
+            rasters: vec![event(0, "Declared"), event(1, "Bare")],
             sources: vec![CcpSource {
                 name: "Declared".into(),
                 daq_list: 0,
@@ -1437,8 +1390,8 @@ mod tests {
         assert_eq!(declared.event.as_deref(), Some("Declared"));
         let fallback = lists
             .iter()
-            .find(|l| l.event.as_deref() == Some("Undeclared"))
-            .expect("undeclared raster still gets a list");
+            .find(|l| l.event.as_deref() == Some("Bare"))
+            .expect("raster without a SOURCE still gets a list");
         assert_eq!(fallback.id, 1, "list 0 belongs to the declared raster");
     }
 

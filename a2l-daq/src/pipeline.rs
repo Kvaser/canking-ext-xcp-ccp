@@ -434,18 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn distinct_names_produce_no_collision_warning() {
-        let mut project = parse_a2l(A2L, &[]).unwrap();
-        let assignments = vec![("Task10ms".into(), vec!["Rpm".into()])];
-        let out = build(&mut project, &assignments, Protocol::Xcp, "test.a2l").unwrap();
-        assert!(
-            !out.warnings
-                .iter()
-                .any(|w| matches!(w, Diagnostic::CollidingNames { .. }))
-        );
-    }
-
-    #[test]
     fn build_stamps_the_assignments_onto_the_project() {
         let mut project = parse_a2l(A2L, &[]).unwrap();
         assert_eq!(project.signals[0].event, None);

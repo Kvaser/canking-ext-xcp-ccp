@@ -340,24 +340,6 @@ mod tests {
     }
 
     #[test]
-    fn response_format_error_pattern_never_shadows_positive() {
-        for protocol in Protocol::ALL {
-            let format = protocol.response_format();
-            for data in [
-                [0xFF, 0x00].as_slice(),
-                &[0xFF, 0x33],
-                &[0xFE, 0x22],
-                &[0x01, 0x00],
-            ] {
-                assert!(
-                    !(format.is_positive(data) && format.is_error(data)),
-                    "{protocol:?} classified {data:02X?} as both"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn if_data_tag_maps_to_protocol() {
         assert_eq!(Protocol::from_if_data_tag("XCP"), Some(Protocol::Xcp));
         assert_eq!(

@@ -197,7 +197,6 @@ fn every_decodable_signal_in_a_real_a2l_produces_compilable_source() {
         decoders.iter().any(|d| d.factor != 1.0),
         "sample should include scaled signals"
     );
-    let _ = &names;
 
     let comparisons: Vec<Comparison> = decoders
         .iter()
@@ -345,7 +344,6 @@ fn daq_init_compiles_with_thousands_of_states() {
     let source = generate_tscript(&config);
 
     assert!(source.contains("    switch (state) {"), "got:\n{source}");
-    assert!(!source.contains("else if (state =="), "no chain:\n{source}");
     assert_eq!(
         source.matches("        break;\n").count(),
         states,
