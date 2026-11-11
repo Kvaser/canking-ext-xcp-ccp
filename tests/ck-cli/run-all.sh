@@ -6,17 +6,7 @@
 # Usage:
 #   ./run-all.sh [case.json ...]      (default: every cases/*.case.json)
 #
-# Environment (full table with defaults in README.md, "Environment"):
-#   CK                path to ck.exe / ck                        (auto-detected)
-#   EXT_NAME          service extension name                     (default: daq_decoder)
-#   EXT_CKEXT         packaged extension to install before the run (default: newest canking-service/dist/$EXT_NAME-*.ckext)
-#   EXT_WASM          wasm to install when no .ckext is packaged (default: target/wasm32-wasip2/release/$EXT_NAME.wasm)
-#   EXT_DISPLAY_NAME  display name the log assertions match on   (default: DAQ Decoder)
-#   SETTLE_S          seconds to let a measurement run           (default: 3; 5 in 90-live-physical)
-#   REPLAY_MS         fixed replay rate for recorded logs        (default: 1)
-#   OUT_DIR           directory for generated artifacts          (default: tests/ck-cli/out)
-#   PHYS_CHANNEL      physical CAN channel wired to the ECU, for 90-live-physical (auto-detected if only one)
-#   PHYS_BITRATE      bench bit rate for 90-live-physical when it differs from the A2L (PHYS_DATA_BITRATE: CAN FD)
+# Environment variables and their defaults: README.md, "Environment".
 
 set -u
 INVOKED_FROM="$PWD"
@@ -52,7 +42,7 @@ run() {  # run <label> <script> [args...]
 }
 
 echo "ck:        ${CK_BIN:-<not found>}"
-echo "extension: ${EXT_NAME:-daq_decoder}"
+echo "extension: $EXT_NAME"
 echo "out dir:   $OUT_DIR"
 
 # Every per-case check shells out to ck, so nothing after setup can do anything useful without it.
@@ -61,7 +51,6 @@ if [ -n "${CK_BIN:-}" ] && ck_ get about > /dev/null 2>&1; then
     CK_OK=1
     # Make sure the extension under test is the one that was just built, not whatever an earlier run left installed.
     install_extension
-    export EXT_NAME="${EXT_NAME:-daq_decoder}"
 else
     echo
     echo "ck not found or unreachable; every per-case check needs it, so all are blocked"
@@ -81,21 +70,21 @@ label_of() { basename "${1%.sh}"; }   # ./checks/10-config.sh -> 10-config
 run "$(label_of "$setup_check"): A2L -> config JSON + fixture" "$setup_check" "${cases[@]}"
 setup_status=$?
 
+blocked=""
 if [ "$setup_status" -eq "$SKIP_EXIT" ]; then
     # A blanket prerequisite gap (wasm not built, node_modules missing): setup bailed before touching a single case, so nothing below can run.
     echo
     echo "setup skipped; every per-case check is blocked"
-    for case_file in "${cases[@]}"; do
-        name="$(basename "$case_file" .case.json)"
-        for check in "${percase_checks[@]}"; do
-            RESULTS+=("blocked $(label_of "$check") [$name] (setup skipped)")
-        done
-    done
+    blocked="setup skipped"
 elif [ "$CK_OK" -eq 0 ]; then
+    blocked="ck unavailable"
+fi
+
+if [ -n "$blocked" ]; then
     for case_file in "${cases[@]}"; do
         name="$(basename "$case_file" .case.json)"
         for check in "${percase_checks[@]}"; do
-            RESULTS+=("blocked $(label_of "$check") [$name] (ck unavailable)")
+            RESULTS+=("blocked $(label_of "$check") [$name] ($blocked)")
         done
     done
 else

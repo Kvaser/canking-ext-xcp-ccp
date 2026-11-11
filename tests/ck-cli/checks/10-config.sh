@@ -68,8 +68,7 @@ for case_file in "${cases[@]}"; do
         continue
     fi
 
-    if node "$CLI_DIR/util/make-fixture.mjs" "$OUT_DIR/$name.config.json" \
-            --out-dir "$OUT_DIR" --name "$name"; then
+    if node "$CLI_DIR/util/make-fixture.mjs" "$OUT_DIR/$name.config.json"; then
         pass "$name: DTO fixture generated from config layout"
     else
         fail "$name: fixture generation failed"

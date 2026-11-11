@@ -2,35 +2,39 @@
 // Assert the extension's own log messages for the most recent run.
 //
 //   node eventlog.mjs <CanKing_Log.log> <nodeName> [--prefix "text"]
+//   node eventlog.mjs <CanKing_Log.log> <nodeName> --contains "phrase one" ["phrase two" ...]
 //
-// The extension reports through the host's log_msg, and CanKing writes those
-// lines into the service log prefixed with the data processor's node name.
+// The extension reports through the host's log_msg, and CanKing writes those lines into the service log prefixed with the data processor's node name.
 //
-// The service log is cumulative across the whole service lifetime, so we scope
-// to the current run by taking only what follows the LAST "Added new data processor '<nodeName>'" line.
+// The service log is cumulative across the whole service lifetime. 
+// Scope to the current run by taking only what follows the LAST "Added new data processor '<nodeName>'" line.
+//
+// --contains exits 0 if any phrase shows up in the run (in the whole log when the run's line is missing), 1 otherwise.
 import { parseArgs } from "node:util";
-import { readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";     
 
 const { positionals, values } = parseArgs({
   args: process.argv.slice(2),
-  options: { prefix: { type: "string" } },
+  options: { prefix: { type: "string" }, contains: { type: "boolean", default: false } },
   allowPositionals: true,
 });
-const [logPath, nodeName] = positionals;
+const [logPath, nodeName, ...phrases] = positionals;
 const prefix = values.prefix ?? nodeName;
 
-if (!logPath || !nodeName) {
-  console.error("usage: eventlog.mjs <log> <nodeName> [--prefix \"text\"]");
-  process.exit(1);
+if (!logPath || !nodeName || values.contains !== phrases.length > 0) {
+  console.error('usage: eventlog.mjs <log> <nodeName> [--prefix "text"] | --contains "phrase" ...');
+  process.exit(2);
 }
 
 const all = readFileSync(logPath, "latin1").split(/\r?\n/);
-const anchor = all.reduce(
-  (last, l, i) => (l.includes(`Added new data processor '${nodeName}'`) ? i : last),
-  -1,
-);
+const anchor = all.findLastIndex((l) => l.includes(`Added new data processor '${nodeName}'`));
 
-// The caller passes a node name unique to this run, so a missing anchor means the log does not cover this run at all
+if (values.contains) {
+  const run = anchor < 0 ? all : all.slice(anchor);
+  process.exit(run.some((l) => phrases.some((p) => l.includes(p))) ? 0 : 1);
+}
+
+// The caller passes a node name unique to this run, a missing anchor means the log does not cover this run at all
 if (anchor < 0) {
   console.log(
     `service log does not cover this run (no "Added new data processor '${nodeName}'").\n` +

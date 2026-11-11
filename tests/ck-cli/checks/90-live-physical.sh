@@ -16,16 +16,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 FAILURES=0
 CASE_FILE="${1:?usage: live-physical.sh <case.json describing the connected ECU>}"
 NAME="$(basename "$CASE_FILE" .case.json)"
-EXT_NAME="${EXT_NAME:-daq_decoder}"
 SETTLE_S="${SETTLE_S:-5}"
 DP_NAME="DAQ Decoder $$"
 EXT_DISPLAY_NAME="${EXT_DISPLAY_NAME:-DAQ Decoder}"
 LOGNAME="live-physical"
 
 require_ck || exit $SKIP_EXIT
-
-CONFIG="$OUT_DIR/$NAME.config.json"
-[ -f "$CONFIG" ] || { echo "  FAILED  missing $CONFIG (run checks/10-config.sh first)"; exit 1; }
+need_outputs "$NAME" || exit 1
 
 chan=$(physical_channel); status=$?
 case $status in
@@ -34,18 +31,7 @@ case $status in
     *) fail "$chan"; exit 1 ;;
 esac
 
-# The extension picks an output channel matching the config's framing.
-# CONNECT is the first command in both protocols' init sequence: XCP `ff 00`, CCP `01 ..`.
-read -r _ NEEDS_FD BITRATE DBITRATE CROID DTO_ID CONNECT_BYTE < <(node -e '
-const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-const x=c.project.xcp_data?.xcp_info, k=c.project.ccp_data?.info;
-const xcp=String(c.protocol).toLowerCase()==="xcp";
-const fd=xcp?x?.can_fd:null;
-process.stdout.write([xcp?"xcp":"ccp", fd?1:0, (xcp?x?.baudrate:k?.baudrate)||500000,
-  fd?.data_baudrate||2000000, ((xcp?x?.can_id_master:k?.cro_id)||0).toString(16),
-  ((xcp?x?.can_id_slave:k?.dto_id)||0).toString(16),
-  xcp?"ff":"01"].join(" "));
-' "$CONFIG")
+bus_params "$CONFIG"
 
 # An A2L's bus settings don't always match the bench; PHYS_BITRATE / PHYS_DATA_BITRATE (implies CAN FD) override them.
 BITRATE="${PHYS_BITRATE:-$BITRATE}"
@@ -85,7 +71,7 @@ if [ -z "$EV" ]; then
     fail "could not capture the service event log"
     exit 1
 fi
-if node "$CLI_DIR/assert/log-contains.mjs" "$EV" "$DP_NAME" \
+if node "$CLI_DIR/assert/eventlog.mjs" "$EV" "$DP_NAME" --contains \
         "Failed to open input channel" "Failed to open output channel" "Canlib error: [canOpenChannel]"; then
     skip "the local CAN channel could not be opened -- check it isn't held by another program" \
          "and that the adapter is still plugged in." \
@@ -96,24 +82,24 @@ fi
 # ---- step 2: init sequence out, DAQ data back --------------------------------
 #
 # Whether the extension *tried* to send the init sequence is checked in the service log.
-if node "$CLI_DIR/assert/log-contains.mjs" "$EV" "$DP_NAME" "no channel available to send DAQ commands"; then
+if node "$CLI_DIR/assert/eventlog.mjs" "$EV" "$DP_NAME" --contains "no channel available to send DAQ commands"; then
     fail "extension found no usable channel to send DAQ commands on"
     exit 1
 fi
-if ! node "$CLI_DIR/assert/log-contains.mjs" "$EV" "$DP_NAME" "queueing"; then
+if ! node "$CLI_DIR/assert/eventlog.mjs" "$EV" "$DP_NAME" --contains "queueing"; then
     fail "extension never queued the DAQ init sequence (expected 'queueing N DAQ init frames' in the service log)"
     exit 1
 fi
 pass "extension queued the DAQ init sequence"
 
-if ! node "$CLI_DIR/assert/log-contains.mjs" "$EV" "$DP_NAME" "sending"; then
+if ! node "$CLI_DIR/assert/eventlog.mjs" "$EV" "$DP_NAME" --contains "sending"; then
     fail "extension never sent the DAQ stop sequence on measurement stop (expected 'sending N DAQ stop frames' in the service log)"
     exit 1
 fi
 pass "extension sent the DAQ stop sequence"
 
 # Captured rather than let print straight through: an empty result here isn't a failure.
-if TX_OUT=$(node "$CLI_DIR/assert/asc.mjs" "$LOG_OUT" --tx-on-id "$CROID" --min 1 --first-data-byte "$CONNECT_BYTE" 2>&1); then
+if TX_OUT=$(node "$CLI_DIR/assert/asc.mjs" "$LOG_OUT" --tx-on-id "$CROID" --first-data-byte "$CONNECT_BYTE" 2>&1); then
     pass "...and it succesfully established connection on id 0x$CROID"
     detail_block "$TX_OUT"
 else
@@ -121,7 +107,7 @@ else
            "frame before it counts as sent, so this is expected with the ECU off/unwired."
 fi
 
-if ! RX_OUT=$(node "$CLI_DIR/assert/asc.mjs" "$LOG_OUT" --rx-on-id "$DTO_ID" --min 1 2>&1); then
+if ! RX_OUT=$(node "$CLI_DIR/assert/asc.mjs" "$LOG_OUT" --rx-on-id "$DTO_ID" 2>&1); then
     skip "no DAQ frames came back from the ECU on id 0x$DTO_ID -- check it is powered, wired to" \
          "channel $chan, and that the config's bitrate/CAN-FD settings match."
     exit $SKIP_EXIT
@@ -139,17 +125,6 @@ esac
 detail_block "$EVLOG_OUT"
 
 # ---- step 3: what came back decodes correctly --------------------------------
-SESSION=""
-close_session() { [ -n "$SESSION" ] && ck_ analysis close "$SESSION" > /dev/null 2>&1 || true; }
-trap 'close_session; cleanup_set PHASE; cleanup_set CHANNELS' EXIT
-
-SESSION=$(ck_capture analysis open "$(winpath "$LOG_OUT")" --json \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).sessionId)}catch{process.exit(1)}})')
-if [ -z "$SESSION" ]; then
-    fail "ck analysis open did not return a session id"
-    exit 1
-fi
-
 # The live decoder re-keys a list whose first PID the ECU reports differently (logged above), but the offline  analysis sends no commands and can't learn that.
 # Carry this run's logged corrections into the config it decodes with.
 ANALYSIS_CONFIG="$OUT_DIR/$NAME.physical.config.json"
@@ -166,21 +141,10 @@ for (const m of run.matchAll(/DAQ list (\d+) starts at PID 0x([0-9A-Fa-f]+)/g)) 
 fs.writeFileSync(out, JSON.stringify(cfg));
 ' "$CONFIG" "$EV" "$DP_NAME" "$ANALYSIS_CONFIG"
 
-STEP="ext:name=$EXT_NAME;config=$(cat "$ANALYSIS_CONFIG")"
-SET_OUT=$(ck_capture analysis set-processing "$SESSION" --step "$STEP" --json)
-if printf '%s' "$SET_OUT" | grep -q '"error"'; then
-    fail "set-processing reported an error:"
-    detail_block "$SET_OUT"
-    exit 1
-fi
-
 FRAMES="$OUT_DIR/$NAME.physical.frames.json"
-ck_ analysis frames-between "$SESSION" --start-s 0 --end-s 3600 --max-count 10000 --json \
-    > "$FRAMES" 2>&1
-if ! node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$FRAMES" 2>/dev/null; then
-    fail "frames-between did not return JSON:"
-    detail_block "$(head -5 "$FRAMES")"
-elif DECODE_OUT=$(node "$CLI_DIR/assert/decode-log.mjs" "$ANALYSIS_CONFIG" "$FRAMES" "$CASE_FILE" --no-pin --min-daq-frames 1); then
+analysis_frames "$LOG_OUT" "$ANALYSIS_CONFIG" "$FRAMES" || exit 1
+
+if DECODE_OUT=$(node "$CLI_DIR/assert/decode-log.mjs" "$ANALYSIS_CONFIG" "$FRAMES" "$CASE_FILE" --no-pin --min-daq-frames 1 2>&1); then
     pass "DAQ frames from the ECU decoded consistently with the config's layout"
     detail_block "$DECODE_OUT"
 else

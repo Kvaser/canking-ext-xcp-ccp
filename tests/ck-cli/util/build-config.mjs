@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Headless a2l -> Config JSON.
 //
-//   node build-config.mjs <case.json> [--out-dir DIR] [--strict]
+//   node build-config.mjs <case.json> --out-dir DIR [--strict]
 //
 // A case file in /cases is the replacement for the GUI's selection screens:
 //
@@ -13,8 +13,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { fail } from "./cli.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = process.env.REPO_ROOT ? resolve(process.env.REPO_ROOT) : resolve(HERE, "..", "..", "..");
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WASM_JS = join(REPO, "canking-gui", "src", "a2l-daq-wasm", "a2l_daq.js");
 
 const { positionals, values } = parseArgs({
@@ -23,9 +22,9 @@ const { positionals, values } = parseArgs({
   options: { "out-dir": { type: "string" }, strict: { type: "boolean", default: false } },
 });
 const [casePath] = positionals;
-if (!casePath) fail("usage: build-config.mjs <case.json> [--out-dir DIR] [--strict]");
+if (!casePath || !values["out-dir"]) fail("usage: build-config.mjs <case.json> --out-dir DIR [--strict]");
 const strict = values.strict;
-const outDir = resolve(values["out-dir"] ?? dirname(casePath));
+const outDir = resolve(values["out-dir"]);
 
 const testCase = JSON.parse(readFileSync(casePath, "utf8"));
 const name = testCase.name ?? "config";

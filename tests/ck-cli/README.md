@@ -102,8 +102,9 @@ Everything in `out/` is derived, so a check never needs to know where a case cam
 A new `checks/NN-name.sh`, numbered after what it depends on (`10-config`'s output is always there; anything needing a
 running measurement goes after `40`):
 
-- `source ../lib.sh` and use its helpers: `ck_`, `pass`/`fail`/`skip`, `detail`/`detail_block`, `add_node` (adds a
-  node, checks the id, registers it for cleanup), `run_for_settle`, `with_start_daq`, `add_virtual_pair`, `case_kind`,
+- `source ../lib.sh` and use its helpers: `ck_`, `pass`/`fail`/`skip`, `detail`/`detail_block`, `need_outputs` (finds
+  `10-config`'s config and log), `add_node` (adds a node, checks the id, registers it for cleanup), `run_for_settle`,
+  `with_start_daq`, `bus_params`, `add_virtual_pair`, `analysis_frames` (decodes a log offline), `case_kind`,
   `case_log`, `track_node`/`cleanup_set`.
 - Put the assertions in a small `assert/*.mjs`. It prints plain facts; the check prints the verdict and passes the facts
   to `detail_block`.

@@ -13,16 +13,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 FAILURES=0
 CASE_FILE="${1:-$CLI_DIR/cases/xcp-sample.case.json}"
 NAME="$(basename "$CASE_FILE" .case.json)"
-EXT_NAME="${EXT_NAME:-daq_decoder}"
 
 require_ck || exit $SKIP_EXIT
 assert_setup_empty || exit $SKIP_EXIT
 
-CONFIG="$OUT_DIR/$NAME.config.json"
-[ -f "$CONFIG" ] || { echo "  FAILED  missing $CONFIG (run checks/10-config.sh first)"; exit 1; }
-# Only there to give the data processor an upstream source.
-FIXTURE="$(case_log "$NAME")" \
-    || { echo "  FAILED  no log for '$NAME' in $OUT_DIR (run checks/10-config.sh first)"; exit 1; }
+# The log is only there to give the data processor an upstream source.
+need_outputs "$NAME" log || exit 1
 
 declare -a NODES=()
 trap 'cleanup_set NODES' EXIT
