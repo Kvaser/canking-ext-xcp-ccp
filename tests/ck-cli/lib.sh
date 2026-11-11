@@ -5,6 +5,9 @@
 
 set -u
 
+# The extension under test. run-all.sh may change it to the name the freshly built one installs under.
+export EXT_NAME="${EXT_NAME:-daq_decoder}"
+
 # ---- locating ck -------------------------------------------------------------
 
 find_ck() {
@@ -27,15 +30,7 @@ ck_() {
     "$CK_BIN" "$@" < /dev/null
 }
 
-ck_capture() {
-    local tmp status
-    tmp=$(mktemp)
-    ck_ "$@" > "$tmp" 2>&1
-    status=$?
-    cat "$tmp"
-    rm -f "$tmp"
-    return "$status"
-}
+ck_capture() { ck_ "$@" 2>&1; }
 
 require_ck() {
     if [ -z "$CK_BIN" ]; then
@@ -60,7 +55,7 @@ mkdir -p "$OUT_DIR"
 winpath() {
     local p="$1"
     case "$p" in
-        /*|?:*|?:\\*) ;; 
+        /*|?:*|?:\\*) ;;
         *) p="$PWD/$p" ;;
     esac
     if command -v cygpath > /dev/null 2>&1; then
@@ -95,18 +90,43 @@ case_log() {  # case_log <name>
     return 1
 }
 
-# ---- virtual channel discovery -----------------------------------------------
-virtual_channels() {
-    ck_ get devices --json            > "$OUT_DIR/dev-all.json" 2>/dev/null || return 1
-    ck_ get devices --no-virtuals --json > "$OUT_DIR/dev-phys.json" 2>/dev/null || return 1
-    node "$CLI_DIR/util/virtual-channels.mjs" \
-        "$OUT_DIR/dev-all.json" "$OUT_DIR/dev-phys.json"
+# What checks/10-config.sh left for case <name>: sets CONFIG and, given "log", FIXTURE (the log case_log finds).
+# Prints a failure and returns 1 when one is missing.
+need_outputs() {  # need_outputs <name> [log]
+    CONFIG="$OUT_DIR/$1.config.json"
+    if [ ! -f "$CONFIG" ]; then
+        fail "missing $CONFIG (run checks/10-config.sh first)"
+        return 1
+    fi
+    if [ -n "${2:-}" ] && ! FIXTURE="$(case_log "$1")"; then
+        fail "no log for '$1' in $OUT_DIR (run checks/10-config.sh first)"
+        return 1
+    fi
+}
+
+# ---- CAN channel discovery ---------------------------------------------------
+
+# The canlib channel numbers `ck get devices` lists, one per line. The JSON is kept in <out-file>.
+device_channels() {  # device_channels <out-file> [ck get devices args...]
+    local out="$1"
+    shift
+    ck_ get devices --json "$@" > "$out" 2>/dev/null || return 1
+    node -e '
+        const devs = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        for (const d of devs) for (const c of d.channels ?? []) console.log(c.channelNumber);
+    ' "$out"
+}
+
+virtual_channels() {  # the virtual channel numbers, ascending
+    local phys
+    phys=$(device_channels "$OUT_DIR/dev-phys.json" --no-virtuals) || return 1
+    device_channels "$OUT_DIR/dev-all.json" | grep -vxF "$phys" | sort -n
 }
 
 # ---- measurement setup cleanup ----------------------------------------------
 #
-# A check registers ids it creates into an array it owns, then tears that arraydown with cleanup_set. 
-# Separate sets let a multi-phase check (e.g. checks/40-live.sh) tear down one phase's nodes while keeping another's 
+# A check registers ids it creates into an array it owns, then tears that arraydown with cleanup_set.
+# Separate sets let a multi-phase check tear down one phase's nodes while keeping another's
 # (For example, drop a data processor between phases, keep the CAN channels).
 #
 #   declare -a MY_SET=()
@@ -161,12 +181,10 @@ cleanup_set() {  # cleanup_set <set-var-name>
 #   esac
 physical_channel() {
     if [ -n "${PHYS_CHANNEL:-}" ]; then printf '%s' "$PHYS_CHANNEL"; return 0; fi
-    ck_ get devices --no-virtuals --json > "$OUT_DIR/dev-phys.json" 2>/dev/null \
+    local list
+    list=$(device_channels "$OUT_DIR/dev-phys.json" --no-virtuals) \
         || { printf 'could not query physical CAN devices from the service\n'; return 1; }
-    mapfile -t chans < <(node -e '
-        const devs = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-        for (const d of devs) for (const c of d.channels ?? []) console.log(c.channelNumber);
-    ' "$OUT_DIR/dev-phys.json")
+    local chans=($list)
     case "${#chans[@]}" in
         0)
             printf 'no physical CAN channel found. Connect the adapter wired to the ECU.\n'
@@ -182,36 +200,24 @@ physical_channel() {
 
 # ---- paired virtual CAN channels ----------------------------------------------
 #
-# Adds two virtual channels ("VCAN_A", "VCAN_B")
+# Adds two virtual channels, "VCAN_A" and "VCAN_B", tracked in <set-var-name>, and sets VCAN_A / VCAN_B to their node ids.
+# Otherwise prints why and returns $SKIP_EXIT (fewer than two virtual channels found) or 1 (`ck add canchannel` failed):
 #
-# track and exit/skip in the caller, using the printed line and exit status below.
-#
-#   pair=$(add_virtual_pair "$BITRATE" ...); status=$?
-#   case $status in
-#       0)  read -r id_a id_b <<< "$pair"
-#           track_node CHANNELS source "$id_a"
-#           track_node CHANNELS source "$id_b" ;;
-#       "$SKIP_EXIT") skip "$pair"; exit "$SKIP_EXIT" ;;
-#       *)  fail "$pair"; exit 1 ;;
-#   esac
-#
-# On success prints "<id_a> <id_b>" and returns 0. Otherwise prints one message line and returns 
-# 77 (fewer than two virtual channels found) or 1 (`ck add canchannel` itself failed).
-add_virtual_pair() {  # add_virtual_pair <bitrate> [canchannel args...]
-    local bitrate="$1"; shift
-    local vchans
-    mapfile -t vchans < <(virtual_channels) || true
+#   add_virtual_pair CHANNELS "$BITRATE" || exit $?
+add_virtual_pair() {  # add_virtual_pair <set-var-name> <bitrate> [canchannel args...]
+    local set_name="$1" bitrate="$2" vchans
+    shift 2
+    mapfile -t vchans < <(virtual_channels)
     if [ "${#vchans[@]}" -lt 2 ]; then
-        printf 'found %d virtual CAN channel(s), need 2. Install/enable the Kvaser Virtual CAN Driver to run this test.\n' "${#vchans[@]}"
+        skip "found ${#vchans[@]} virtual CAN channel(s), need 2. Install/enable the Kvaser Virtual CAN Driver to run this test."
         return "$SKIP_EXIT"
     fi
-    local id_a id_b id
-    id_a=$(ck_capture add canchannel --number "${vchans[0]}" --name "VCAN_A" -r "$bitrate" "$@" | tr -d '\r')
-    id_b=$(ck_capture add canchannel --number "${vchans[1]}" --name "VCAN_B" -r "$bitrate" "$@" | tr -d '\r')
-    for id in "$id_a" "$id_b"; do
-        printf '%s' "$id" | grep -qE '^[0-9a-fA-F-]{36}$' || { printf 'add canchannel failed: %s\n' "$id"; return 1; }
-    done
-    printf '%s %s\n' "$id_a" "$id_b"
+    add_node "$set_name" source "add canchannel" \
+        canchannel --number "${vchans[0]}" --name "VCAN_A" -r "$bitrate" "$@" || return 1
+    VCAN_A="$NODE_ID"
+    add_node "$set_name" source "add canchannel" \
+        canchannel --number "${vchans[1]}" --name "VCAN_B" -r "$bitrate" "$@" || return 1
+    VCAN_B="$NODE_ID"
 }
 
 # Refuse to run against a setup that already has work in it
@@ -231,7 +237,7 @@ assert_setup_empty() {
 # Prefers the packaged .ckext, falls back to the raw wasm when no .ckext has been packaged.
 
 install_extension() {
-    local ext="${EXT_NAME:-daq_decoder}"
+    local ext="$EXT_NAME"
     local wasm="${EXT_WASM:-$REPO_ROOT/target/wasm32-wasip2/release/$ext.wasm}"
     local ckext="${EXT_CKEXT:-$(ls -t "$REPO_ROOT/canking-service/dist/${ext}"-*.ckext 2>/dev/null | head -n 1)}"
     local artifact out registered
@@ -261,22 +267,7 @@ install_extension() {
     return 0
 }
 
-# ---- logger output files -----------------------------------------------------
-
-clear_logs() {  # clear_logs <dir> <prefix>
-    rm -f "$1/$2"_*.asc 2>/dev/null || true
-}
-
-newest_log() {  # newest_log <dir> <prefix>  -> highest-numbered <prefix>_N.asc
-    local dir="$1" prefix="$2" best="" bestn=-1 f n
-    for f in "$dir/$prefix"_*.asc; do
-        [ -f "$f" ] || continue
-        n="${f##*_}"; n="${n%.asc}"
-        case "$n" in '' | *[!0-9]*) continue ;; esac
-        if [ "$n" -gt "$bestn" ]; then bestn="$n"; best="$f"; fi
-    done
-    [ -n "$best" ] && printf '%s' "$best"
-}
+# ---- the config --------------------------------------------------------------
 
 # The same config with start_daq turned on, written beside the original.
 with_start_daq() {  # with_start_daq <config-path> <out-path>
@@ -287,6 +278,32 @@ with_start_daq() {  # with_start_daq <config-path> <out-path>
         fs.writeFileSync(process.argv[2], JSON.stringify(c));
     ' "$1" "$2" || return 1
     printf '%s' "$2"
+}
+
+# The config's bus settings: sets NEEDS_FD (0|1), BITRATE, DBITRATE, CROID and DTO_ID (hex), and CONNECT_BYTE.
+# The extension picks an output channel matching the config's framing.
+# CONNECT is the first command in both protocols' init sequence: XCP `ff 00`, CCP `01 ..`.
+bus_params() {  # bus_params <config>
+    read -r NEEDS_FD BITRATE DBITRATE CROID DTO_ID CONNECT_BYTE < <(node -e '
+const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+const x=c.project.xcp_data?.xcp_info, k=c.project.ccp_data?.info;
+const xcp=String(c.protocol).toLowerCase()==="xcp";
+const fd=xcp?x?.can_fd:null;
+process.stdout.write([fd?1:0, (xcp?x?.baudrate:k?.baudrate)||500000,
+  fd?.data_baudrate||2000000, ((xcp?x?.can_id_master:k?.cro_id)||0).toString(16),
+  ((xcp?x?.can_id_slave:k?.dto_id)||0).toString(16),
+  xcp?"ff":"01"].join(" "));
+' "$1")
+}
+
+# ---- logger output files -----------------------------------------------------
+
+clear_logs() {  # clear_logs <dir> <prefix>
+    rm -f "$1/$2"_*.asc 2>/dev/null || true
+}
+
+newest_log() {  # newest_log <dir> <prefix>  -> highest-numbered <prefix>_N.asc
+    ls -v "$1/$2"_*.asc 2>/dev/null | grep -E '_[0-9]+\.asc$' | tail -n 1
 }
 
 # Run the measurement that is already set up for SETTLE_S, then hand back the log the message logger wrote.
@@ -302,7 +319,7 @@ run_for_settle() {  # run_for_settle <logname> [replay-node-name] [pre-stop-hook
 
     ck_ start meas > /dev/null 2>&1
     [ -n "$replay" ] && ck_ start logreplay "$replay" > /dev/null 2>&1
-    node -e "setTimeout(()=>{}, ${SETTLE_S:-3} * 1000)"
+    sleep "${SETTLE_S:-3}"
     [ -n "$pre_stop" ] && "$pre_stop"
     ck_ stop meas > /dev/null 2>&1
 
@@ -327,7 +344,7 @@ wait_for_log() {  # wait_for_log <dir> <prefix> [timeout-seconds]
             printf '%s' "$f"
             return 0
         fi
-        node -e "setTimeout(()=>{},250)" 2>/dev/null || sleep 1
+        sleep 0.25
         tries=$((tries + 1))
     done
     f="$(newest_log "$dir" "$prefix")"
@@ -335,9 +352,44 @@ wait_for_log() {  # wait_for_log <dir> <prefix> [timeout-seconds]
     return 1
 }
 
+# ---- offline decode ----------------------------------------------------------
+#
+# Decode a log offline with the extension under test: opens a `ck analysis` session on <log>, attaches $EXT_NAME with <config>, and writes `frames-between --json` to <frames-out>.
+#
+# Prints a failure and returns 1 if a step fails; "report" also passes each step.
+analysis_frames() (  # analysis_frames <log> <config> <frames-out> [report]
+    log="$1" config="$2" frames="$3" report="${4:-}" session=""
+    trap '[ -n "$session" ] && ck_ analysis close "$session" > /dev/null 2>&1' EXIT
+
+    session=$(ck_capture analysis open "$(winpath "$log")" --json \
+        | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).sessionId)}catch{process.exit(1)}})')
+    if [ -z "$session" ]; then
+        fail "ck analysis open did not return a session id"
+        exit 1
+    fi
+    [ -n "$report" ] && pass "opened analysis session $session"
+
+    out=$(ck_capture analysis set-processing "$session" --step "ext:name=$EXT_NAME;config=$(cat "$config")" --json)
+    if printf '%s' "$out" | grep -q '"error"'; then
+        fail "set-processing reported an error:"
+        detail_block "$out"
+        exit 1
+    fi
+    # Note: set-processing always reports "frameDefinitions": [] even on success.
+    [ -n "$report" ] && pass "attached extension '$EXT_NAME' with generated config"
+
+    ck_ analysis frames-between "$session" --start-s 0 --end-s 3600 --max-count 10000 --json > "$frames" 2>&1
+    if ! node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$frames" 2>/dev/null; then
+        fail "frames-between did not return JSON:"
+        detail_block "$(head -5 "$frames")"
+        exit 1
+    fi
+    exit 0
+)
+
 # ---- service event log -------------------------------------------------------
 #
-# `ck get event-log` writes two files - a service event log (.txt) and the full service log (.log) 
+# `ck get event-log` writes two files - a service event log (.txt) and the full service log (.log)
 # into the working directory of the process that launched ck. Echoes the destination path of the .log file.
 capture_event_log() {  # capture_event_log <dest-dir> <prefix>
     local dest="$1" prefix="$2" out line src moved=""
@@ -367,10 +419,8 @@ capture_event_log() {  # capture_event_log <dest-dir> <prefix>
 #   ok      opened analysis session ...
 #   FAILED  frames-between did not return JSON
 #
-# detail() nests a supporting line (a frame dump, a decoded-value list) under the message column, with no status word of its own, 
-# so it reads as "belongs to the status line above" rather than another result.
-# Call it *after* the pass/fail/skip it supports, so the verdict always leads. 
-# detail_block() does the same for a whole (possibly multi-line) string.
+# detail() nests a supporting line (a frame dump, a decoded-value list) under the message column, with no status word of its own, so it reads as "belongs to the status line above".
+# Call it *after* the pass/fail/skip it supports, so the verdict always leads. detail_block() does the same for a whole (possibly multi-line) string.
 #
 # Scripts exit with SKIP_EXIT when a prerequisite is missing, and run-all.sh reports that as 'skipped'.
 SKIP_EXIT=77

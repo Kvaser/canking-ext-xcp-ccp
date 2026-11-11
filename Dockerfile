@@ -4,7 +4,7 @@
 #   docker run --rm -v "$PWD:/workspace" -u "$(id -u):$(id -g)" -e CI=1 daq-build
 FROM rust:1.97-slim-bookworm
 
-RUN rustup target add wasm32-wasip2
+RUN rustup target add wasm32-wasip2 && rustup component add rustfmt clippy
 
 # Third-party license notices for the wasm components (run.sh stage)
 RUN cargo install --locked --features cli cargo-about@0.9.2 \

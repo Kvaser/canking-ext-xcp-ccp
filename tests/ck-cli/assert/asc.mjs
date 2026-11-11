@@ -2,10 +2,12 @@
 // Assertions over a Kvaser-written .asc message log.
 //
 //   node asc.mjs <log.asc> --rx-payloads <expected.json>
-//   node asc.mjs <log.asc> --tx-on-id <hex-id> [--min N] [--first-data-byte HH]
-//   node asc.mjs <log.asc> --rx-on-id <hex-id> [--min N]
+//   node asc.mjs <log.asc> --tx-on-id <hex-id> [--first-data-byte HH]
+//   node asc.mjs <log.asc> --tx-on-id <hex-id> [--match-byte i=N ...] --print-byte i
+//   node asc.mjs <log.asc> --rx-on-id <hex-id>
 //
 // These assertions test if the right bytes reach the right channel in the right direction.
+// --print-byte instead prints byte i of the first Tx frame on the id whose --match-byte constraints all hold
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { parseAsc } from "../util/asc.mjs";
@@ -17,8 +19,9 @@ const { positionals, values } = parseArgs({
     "rx-payloads": { type: "string" },
     "tx-on-id": { type: "string" },
     "rx-on-id": { type: "string" },
-    min: { type: "string", default: "1" },
     "first-data-byte": { type: "string" },
+    "match-byte": { type: "string", multiple: true, default: [] },
+    "print-byte": { type: "string" },
   },
 });
 const [logPath] = positionals;
@@ -69,12 +72,17 @@ if (values["rx-payloads"] !== undefined) {
 // Check Tx frames on a given id
 if (values["tx-on-id"] !== undefined) {
   const id = parseInt(values["tx-on-id"], 16);
-  const min = Number(values.min);
   const firstByte = values["first-data-byte"];
   const tx = frames.filter((f) => f.id === id && f.dir === "Tx");
-  if (tx.length < min) {
+  if (values["print-byte"] !== undefined) {
+    const at = Number(values["print-byte"]);
+    const want = values["match-byte"].map((m) => m.split("=").map(Number));
+    const hit = tx.find((f) => f.bytes[at] !== undefined && want.every(([i, v]) => f.bytes[i] === v));
+    if (hit) console.log(hit.bytes[at]);
+    else failures++;
+  } else if (!tx.length) {
     bad(
-      `expected at least ${min} Tx frame(s) on id 0x${id.toString(16)}, saw ${tx.length}. ` +
+      `expected at least 1 Tx frame on id 0x${id.toString(16)}, saw none. ` +
         `If the config declares can_fd, the CAN channel must be added with --bit-rate-fd, ` +
         `or the extension finds no usable channel and silently skips DAQ startup.`,
     );
@@ -89,10 +97,9 @@ if (values["tx-on-id"] !== undefined) {
 // Check Rx frames on a given id
 if (values["rx-on-id"] !== undefined) {
   const id = parseInt(values["rx-on-id"], 16);
-  const min = Number(values.min);
   const rx = frames.filter((f) => f.id === id && f.dir === "Rx");
-  if (rx.length < min) {
-    bad(`expected at least ${min} Rx frame(s) on id 0x${id.toString(16)}, saw ${rx.length}`);
+  if (!rx.length) {
+    bad(`expected at least 1 Rx frame on id 0x${id.toString(16)}, saw none`);
   } else {
     console.log(`${rx.length} frame(s) received on id 0x${id.toString(16)}`);
   }

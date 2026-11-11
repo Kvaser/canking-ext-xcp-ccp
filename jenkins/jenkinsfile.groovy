@@ -57,7 +57,7 @@ pipeline {
                         }
                     }
                     steps {
-                        sh './run.sh rust wasm gui stage'
+                        sh './run.sh lint rust wasm gui stage'
                         
                         stash includes: 'canking-gui/dist/**,canking-gui/src/a2l-daq-wasm/**', name: 'dist-gui'
                         stash includes: 'canking-service/dist/**', name: 'dist-service'
@@ -187,20 +187,21 @@ pipeline {
                     // promote_artifacts(env.GIT_COMMIT,'canking-generic/canking/extensions/gui/signal-plot/', 'RELEASE-generic', env.TAG_NAME)
                     echo "no promotion at this time, TODO"
                 } else if (env.BRANCH_NAME == 'main') {
+                    // Release notes come from the source tree: './run.sh pack' removes the staged copies from dist/
                     // upload gui ext
                     jf "rt u canking-gui/dist/daq-gui-*.ckext canking-generic/canking/extensions/gui/daq-converter/${env.GUI_FILE_VERSION}/kv_ck7_daq_converter_gui_ext-${env.GUI_FILE_VERSION}.ckext --fail-no-op --target-props version=${env.GUI_FILE_VERSION}"
-                    // jf "rt u canking-gui/dist/ReleaseNotes.txt canking-generic/canking/extensions/gui/daq-converter/${env.GUI_FILE_VERSION}/ReleaseNotes-${env.GUI_FILE_VERSION}.txt --fail-no-op --target-props version=${env.GUI_FILE_VERSION}"
+                    jf "rt u canking-gui/ReleaseNotes.txt canking-generic/canking/extensions/gui/daq-converter/${env.GUI_FILE_VERSION}/ReleaseNotes-${env.GUI_FILE_VERSION}.txt --fail-no-op --target-props version=${env.GUI_FILE_VERSION}"
                     // upload service ext
                     jf "rt u canking-service/dist/daq_decoder-*.ckext canking-generic/canking/extensions/service/daq-converter/${env.SERVICE_FILE_VERSION}/kv_ck7_daq_converter_service_ext-${env.SERVICE_FILE_VERSION}.ckext --fail-no-op --target-props version=${env.SERVICE_FILE_VERSION}"
-                    //jf "rt u dist/ReleaseNotes.txt canking-generic/canking/extensions/gui/daq-converter/${env.SERVICE_FILE_VERSION}/ReleaseNotes-${env.SERVICE_FILE_VERSION}.txt --fail-no-op --target-props version=${env.SERVICE_FILE_VERSION}"
+                    jf "rt u canking-service/ReleaseNotes.txt canking-generic/canking/extensions/service/daq-converter/${env.SERVICE_FILE_VERSION}/ReleaseNotes-${env.SERVICE_FILE_VERSION}.txt --fail-no-op --target-props version=${env.SERVICE_FILE_VERSION}"
                     jf 'rt bp'
                 } else if (env.BRANCH_NAME == 'develop') {
                     // upload gui ext
                     jf "rt u canking-gui/dist/daq-gui-*.ckext canking-generic/extensions/gui/daq-converter/${env.BRANCH_NAME}/${env.GUI_FILE_VERSION}/kv_ck7_daq_converter_gui_ext-${env.GUI_VERSION}.ckext --fail-no-op --target-props version=${env.GUI_VERSION}"
-                    //jf "rt u dist/ReleaseNotes.txt canking-generic/extensions/gui/daq-converter/${env.BRANCH_NAME}/${env.GUI_FILE_VERSION}/ReleaseNotes-${env.GUI_VERSION}.txt --fail-no-op --target-props version=${env.GUI_VERSION}"
+                    jf "rt u canking-gui/ReleaseNotes.txt canking-generic/extensions/gui/daq-converter/${env.BRANCH_NAME}/${env.GUI_FILE_VERSION}/ReleaseNotes-${env.GUI_VERSION}.txt --fail-no-op --target-props version=${env.GUI_VERSION}"
                     // upload service ext
                     jf "rt u canking-service/dist/daq_decoder-*.ckext canking-generic/extensions/service/daq-converter/${env.BRANCH_NAME}/${env.SERVICE_FILE_VERSION}/kv_ck7_daq_converter_service_ext-${env.SERVICE_VERSION}.ckext --fail-no-op --target-props version=${env.SERVICE_VERSION}"
-                    //jf "rt u dist/ReleaseNotes.txt canking-generic/extensions/gui/daq-converter/${env.BRANCH_NAME}/${env.SERVICE_FILE_VERSION}/ReleaseNotes-${env.SERVICE_VERSION}.txt --fail-no-op --target-props version=${env.SERVICE_VERSION}"
+                    jf "rt u canking-service/ReleaseNotes.txt canking-generic/extensions/service/daq-converter/${env.BRANCH_NAME}/${env.SERVICE_FILE_VERSION}/ReleaseNotes-${env.SERVICE_VERSION}.txt --fail-no-op --target-props version=${env.SERVICE_VERSION}"
                     jf 'rt bp'
                     jf 'rt build-discard --max-builds=5 --delete-artifacts'
                 } else {

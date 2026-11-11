@@ -4,11 +4,11 @@
 //! Without one, the script has to do that itself: this module turns the [`crate::layout`] placements into
 //! `float sig_<name>(const byte data[])` functions plus the globals that latch their values.
 
+use crate::ByteOrder;
 use crate::a2l::A2lProject;
 use crate::daq::DaqList;
 use crate::dbc::sanitize_name;
-use crate::layout::{effective_bit_length, find_placement, signal_placements, SignalPlacement};
-use crate::ByteOrder;
+use crate::layout::{SignalPlacement, effective_bit_length, find_placement, signal_placements};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as FmtWrite};
 
@@ -367,20 +367,13 @@ fn scale(expr: &str, d: &SignalDecoder) -> String {
     out
 }
 
-/// Format a float for a t source literal
+/// Format a float for a t source literal. `f64`'s.
 fn t_float(v: f64) -> String {
     if v == v.trunc() && v.abs() < 1e15 {
-        return format!("{v:.1}");
+        format!("{v:.1}")
+    } else {
+        v.to_string()
     }
-    let plain = format!("{v}");
-    if !plain.contains('e') && !plain.contains('E') {
-        return plain;
-    }
-    let mut expanded = format!("{v:.17}");
-    while expanded.ends_with('0') && !expanded.ends_with(".0") {
-        expanded.pop();
-    }
-    expanded
 }
 
 // ------------------------------- Unit tests ------------------------------------------
@@ -411,6 +404,7 @@ mod tests {
 
     fn daq(entries: Vec<(&str, u16)>) -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 1,
             event: None,
@@ -678,6 +672,7 @@ mod tests {
     fn split_signal_is_rejected_as_undecodable_from_one_frame() {
         let p = project(vec![sig("Long", 6)]);
         let lists = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 1,
             event: None,

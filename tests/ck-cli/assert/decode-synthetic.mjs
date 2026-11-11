@@ -8,6 +8,7 @@
 // Exits 0 when every expected frame was found and decoded correctly, 1 otherwise.
 import { readFileSync } from "node:fs";
 import { close } from "../util/frame-values.mjs";
+import { hex } from "../util/asc.mjs";
 
 const [expPath, framesPath] = process.argv.slice(2);
 if (!expPath || !framesPath) {
@@ -17,9 +18,6 @@ if (!expPath || !framesPath) {
 
 const expected = JSON.parse(readFileSync(expPath, "utf8"));
 const frames = JSON.parse(readFileSync(framesPath, "utf8"));
-
-// Uppercase for hex
-const hexOf = (f) => f.data.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
 
 // Rx frames on the DTO id, in log order.
 const candidates = frames.filter((f) => f.id === expected.dtoId && f.tx === false);
@@ -31,7 +29,7 @@ let checked = 0;
 for (const want of expected.frames) {
   let found = -1;
   for (let i = cursor; i < candidates.length; i++) {
-    if (hexOf(candidates[i]) === want.data) {
+    if (hex(candidates[i].data) === want.data) {
       found = i;
       break;
     }

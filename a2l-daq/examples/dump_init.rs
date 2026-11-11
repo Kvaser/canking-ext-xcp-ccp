@@ -1,5 +1,5 @@
 // Test xcp command generation
-use a2l_daq::{build_daq_list, build_init_commands, parse_a2l, Protocol};
+use a2l_daq::{Protocol, build_daq_list, build_init_commands, parse_a2l};
 
 fn main() {
     let content = std::fs::read_to_string(concat!(

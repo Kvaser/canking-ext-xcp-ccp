@@ -8,7 +8,7 @@ use crate::bindings::canking::data_processor::types::{
 };
 use crate::channels::choose_channel;
 use crate::config::AppliedConfig;
-use crate::decode::{Decoder, PidUpdate, SignalMeta};
+use crate::decode::{Decoder, SignalMeta};
 use crate::definitions;
 use protocol_core::protocol::{ExpectedResponse, Protocol as DaqProtocol};
 
@@ -67,21 +67,15 @@ impl State {
         &self.frame_definitions
     }
 
-    /// Apply a slave's first-PID report to one DAQ list, keeping the metadata and frame
-    /// definitions in step with the decoder.
-    pub(crate) fn apply_first_pid(&mut self, daq_index: usize, first_pid: u8) -> PidUpdate {
-        let Some(decoder) = self.decoder.as_mut() else {
-            return PidUpdate::NoSuchList;
-        };
-        let update = decoder.set_first_pid(daq_index, first_pid);
-        if matches!(update, PidUpdate::Applied { .. }) {
-            self.decoder
-                .as_ref()
-                .expect("decoder was just set")
-                .restamp_pids(&mut self.signal_metadata);
-            self.refresh_frame_definitions();
-        }
-        update
+    /// Apply a slave's first-PID report to one DAQ list, keeping the metadata and frame definitions in step with the decoder.
+    ///
+    /// Returns the PID the list previously decoded at, if it was re-keyed.
+    pub(crate) fn apply_first_pid(&mut self, daq_index: usize, first_pid: u8) -> Option<u8> {
+        let decoder = self.decoder.as_mut()?;
+        let previous = decoder.set_first_pid(daq_index, first_pid)?;
+        decoder.restamp_pids(&mut self.signal_metadata);
+        self.refresh_frame_definitions();
+        Some(previous)
     }
 
     /// Rebuild `frame_definitions` from the current decoder and signal metadata.
@@ -107,35 +101,22 @@ impl State {
         self.choose_and_store_channel()
     }
 
-    /// Re-pick the channel to send DAQ commands on, for the caller to validate before starting.
-    pub(crate) fn commit_output_channel(&mut self) -> Option<ChannelInfo> {
-        self.choose_and_store_channel()
-    }
-
-    fn choose_and_store_channel(&mut self) -> Option<ChannelInfo> {
+    /// (Re-)pick the channel to send DAQ commands on, for the caller to validate before starting.
+    pub(crate) fn choose_and_store_channel(&mut self) -> Option<ChannelInfo> {
         let channel = choose_channel(&self.channels, self.expect_fd);
         self.output_channel = channel.as_ref().map(|c| c.channel_number);
         channel
     }
 
-    /// The DAQ init frames to queue when starting a measurement, and the channel to send them
-    /// on. `None` unless DAQ start is configured, there are init frames, and a channel is set.
-    pub(crate) fn frames_to_queue_on_start(&self) -> Option<(i32, Vec<OutFrame>)> {
-        if !self.start_daq || self.init_frames.is_empty() {
+    /// `frames` (the init or stop frames) as out-frames to send, and the channel to send them on.
+    ///
+    /// `None` unless DAQ start is configured, there are frames, and a channel is set.
+    pub(crate) fn frames_to_send(&self, frames: &[CommandFrame]) -> Option<(i32, Vec<OutFrame>)> {
+        if !self.start_daq || frames.is_empty() {
             return None;
         }
         let channel = self.output_channel?;
-        Some((channel, self.out_frames(&self.init_frames)))
-    }
-
-    /// The DAQ stop frames to send when stopping a measurement, and the channel to send them on. `None` unless DAQ start is
-    /// configured, there are stop frames, and a channel is set.
-    pub(crate) fn frames_to_send_on_stop(&self) -> Option<(i32, Vec<OutFrame>)> {
-        if !self.start_daq || self.stop_frames.is_empty() {
-            return None;
-        }
-        let channel = self.output_channel?;
-        Some((channel, self.out_frames(&self.stop_frames)))
+        Some((channel, self.out_frames(frames)))
     }
 
     /// Forget everything gathered during a measurement.
@@ -241,21 +222,29 @@ mod tests {
 
     #[test]
     fn pending_command_is_optional_reflects_the_matched_frame() {
-        let mut state = State::default();
-        state.init_frames = vec![
-            CommandFrame {
-                optional: false,
-                ..command_frame()
-            },
-            CommandFrame {
-                optional: true,
-                ..command_frame()
-            },
-        ];
+        let mut state = State {
+            init_frames: vec![
+                CommandFrame {
+                    optional: false,
+                    ..command_frame()
+                },
+                CommandFrame {
+                    optional: true,
+                    ..command_frame()
+                },
+            ],
+            ..State::default()
+        };
 
-        assert!(!state.pending_command_is_optional(&[0xFE]), "first command is mandatory");
+        assert!(
+            !state.pending_command_is_optional(&[0xFE]),
+            "first command is mandatory"
+        );
         state.record_answer(0);
-        assert!(state.pending_command_is_optional(&[0xFE]), "second command is optional");
+        assert!(
+            state.pending_command_is_optional(&[0xFE]),
+            "second command is optional"
+        );
     }
 
     #[test]
@@ -281,71 +270,40 @@ mod tests {
     }
 
     #[test]
-    fn commit_output_channel_reselects_against_known_channels() {
-        let mut state = State::default();
-        state.channels = vec![channel(3, ChannelProtocol::Can)];
+    fn choose_and_store_channel_reselects_against_known_channels() {
+        let mut state = State {
+            channels: vec![channel(3, ChannelProtocol::Can)],
+            ..State::default()
+        };
 
-        let chosen = state.commit_output_channel();
+        let chosen = state.choose_and_store_channel();
 
         assert_eq!(chosen.map(|c| c.channel_number), Some(3));
         assert_eq!(state.output_channel, Some(3));
     }
 
     #[test]
-    fn commit_output_channel_is_none_without_channels() {
-        let mut state = State::default();
-
-        assert!(state.commit_output_channel().is_none());
-    }
-
-    #[test]
-    fn frames_to_queue_on_start_requires_start_daq_frames_and_channel() {
-        let mut state = State::default();
-        state.init_frames = vec![command_frame()];
-        state.output_channel = Some(7);
+    fn frames_to_send_requires_start_daq_frames_and_channel() {
+        let frames = [command_frame()];
+        let mut state = State {
+            output_channel: Some(7),
+            ..State::default()
+        };
         assert!(
-            state.frames_to_queue_on_start().is_none(),
+            state.frames_to_send(&frames).is_none(),
             "start_daq is false"
         );
 
         state.start_daq = true;
-        let (channel, frames) = state.frames_to_queue_on_start().expect("ready to queue");
+        let (channel, out) = state.frames_to_send(&frames).expect("ready to send");
         assert_eq!(channel, 7);
-        assert_eq!(frames.len(), 1);
+        assert_eq!(out.len(), 1);
 
-        state.init_frames.clear();
-        assert!(state.frames_to_queue_on_start().is_none(), "no init frames");
+        assert!(state.frames_to_send(&[]).is_none(), "no frames");
 
-        state.init_frames = vec![command_frame()];
         state.output_channel = None;
         assert!(
-            state.frames_to_queue_on_start().is_none(),
-            "no channel committed"
-        );
-    }
-
-    #[test]
-    fn frames_to_send_on_stop_requires_start_daq_frames_and_channel() {
-        let mut state = State::default();
-        state.stop_frames = vec![command_frame()];
-        state.output_channel = Some(7);
-        assert!(
-            state.frames_to_send_on_stop().is_none(),
-            "start_daq is false"
-        );
-
-        state.start_daq = true;
-        let (channel, frames) = state.frames_to_send_on_stop().expect("ready to send");
-        assert_eq!(channel, 7);
-        assert_eq!(frames.len(), 1);
-
-        state.stop_frames.clear();
-        assert!(state.frames_to_send_on_stop().is_none(), "no stop frames");
-
-        state.stop_frames = vec![command_frame()];
-        state.output_channel = None;
-        assert!(
-            state.frames_to_send_on_stop().is_none(),
+            state.frames_to_send(&frames).is_none(),
             "no channel committed"
         );
     }

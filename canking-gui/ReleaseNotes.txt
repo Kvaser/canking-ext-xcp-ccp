@@ -1,6 +1,39 @@
-Kvaser CanKing 7 DAQ Configurator extension
+Kvaser CanKing 7 DAQ Configurator extension 1.1.0
 ===============================================================================
 
-New Features and Fixed Problems in version 1.0.0
+Requires Kvaser CanKing 7.6 or later.
+
+New Features
 -------------------------------------------------------------------------------
-- Initial release.
+
+- A2L: ECU_ADDRESS_EXTENSION, MIN_DAQ and MAX_DLC_REQUIRED.
+- A2L: every GRANULARITY_ODT_ENTRY_SIZE_DAQ_* granularity. ODT entries start and end on whole granules.
+- A2L: linear FORM conversions.
+- A prescaler per DAQ list, to send a list on every n-th cycle of its event when the A2L supports it.
+- t-script: a timed capture can repeat each time the trigger condition turns from false to true, with an optional limit on the number of captures.
+- t-script: a stop condition and a stop frame CAN id that end logging and DAQ for good. Stopping the script stops DAQ too.
+- t-script: the DAQ setup starts over when the ECU stops answering, and optionally when no DAQ frames arrive for a set time.
+
+Improvements to Existing Features
+-------------------------------------------------------------------------------
+
+- A warning for signals whose conversion is not supported. Such signals show raw values.
+- A warning when the A2L uses keywords that change the results but are not read, such as /include or a relative PID field.
+- t-script: XCP commands are padded to 8 bytes, or to MAX_DLC on CAN FD, when the A2L sets MAX_DLC_REQUIRED. CCP commands are always 8 bytes.
+- Minor improvements to the layout and style of the graphical interface.
+
+Bug Fixes
+-------------------------------------------------------------------------------
+
+- A timed t-script captured only once, because stopping the logger also stopped DAQ on the ECU.
+- A t-script that reads signals through the DBC named a DBC message that did not exist when the DAQ lists use more than one CAN id.
+- A signal sharing an ODT entry with part of a split signal was decoded from the wrong bytes.
+- CAN ids that the A2L marks as 29-bit with bit 31 were not recognised.
+- The generated DBC did not mark extended (29-bit) message ids.
+
+Kvaser CanKing 7 DAQ Configurator extension 1.0.0
+===============================================================================
+
+Requires Kvaser CanKing 7.6 or later.
+
+* Initial release.

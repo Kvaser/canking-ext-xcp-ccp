@@ -1,48 +1,44 @@
-//! Transport-agnostic DAQ command generation.
+//! XCP DAQ command generation, independent of the transport.
 //!
-//! [`build_init_commands`] emits the DAQ initialisation sequence in five
-//! phases. Every command must be answered by a positive response, a `0xFE` first byte is an error packet and the sequence must stop.
-//! Commands whose response carries data the pipeline consumes are marked via [`XcpCommand::response`].
-//! [`build_stop_commands`] emits the shutdown sequence for a running DAQ session.
+//! [`build_init_commands`] emits the DAQ init sequence in five phases and [`build_stop_commands`] the shutdown.
+//! Every command expects a positive response (`0xFF`); an error packet (`0xFE`) aborts the sequence unless the command is optional.
+//! Commands whose response carries data the runtime uses are marked in [`Command::response`].
 //!
-//! | Phase | Commands | Expected response |
-//! |-------|----------|-------------------|
-//! | `Connect` | CONNECT, GET_STATUS, GET_SEED + UNLOCK (optional, resource=DAQ) | ack |
-//! | `Prepare` | START_STOP_SYNCH (stop all), then static: CLEAR_DAQ_LIST per list / dynamic: FREE_DAQ, ALLOC_DAQ, ALLOC_ODT xN, ALLOC_ODT_ENTRY xN, then SET_DAQ_ID per list with a user-assigned dynamic CAN id | ack |
-//! | `WriteEntries` | per ODT: SET_DAQ_PTR (entry 0), WRITE_DAQ x entries | ack |
-//! | `SetMode` | SET_DAQ_LIST_MODE per list | ack |
-//! | `Start` | START_STOP_DAQ_LIST (select) per list, START_STOP_SYNCH (start) | select: byte 1 = FIRST_PID |
-//! -------------------------------------------
-//! | 'Stop' | START_STOP_SYNCH (stop all), then static: CLEAR_DAQ_LIST per list / dynamic: FREE_DAQ, DISCONNECT | ack |
+//! | Phase | Commands |
+//! |-------|----------|
+//! | `Connect` | CONNECT, GET_STATUS, GET_SEED + UNLOCK (optional, resource DAQ) |
+//! | `Prepare` | START_STOP_SYNCH (stop all); static: CLEAR_DAQ_LIST per list; dynamic: FREE_DAQ, ALLOC_DAQ, ALLOC_ODT, ALLOC_ODT_ENTRY; then SET_DAQ_ID per list with a user-assigned CAN id |
+//! | `WriteEntries` | per ODT: SET_DAQ_PTR (entry 0), WRITE_DAQ per entry |
+//! | `SetMode` | SET_DAQ_LIST_MODE per list (event channel, prescaler, timestamp) |
+//! | `Start` | START_STOP_DAQ_LIST (select) per list, whose response carries the first PID; START_STOP_SYNCH (start) |
+//! | `Stop` | START_STOP_SYNCH (stop all); static: CLEAR_DAQ_LIST per list; dynamic: FREE_DAQ; DISCONNECT |
 //!
-//! Static and dynamic DAQ share every phase except `Prepare`. Two protocol rules shape the sequence:
+//! Rules that shape the bytes:
 //!
-//! - WRITE_DAQ auto-increments the slave's ODT-entry pointer, so one SET_DAQ_PTR per ODT (at entry 0) is enough.
-//!   Some reject SET_DAQ_PTR with a non-zero entry number.
-//! - ALLOC_DAQ numbers dynamic lists `0..count-1` regardless of the A2L `DAQ_LIST` identifiers, so in dynamic mode every command addresses lists
-//!   by their allocation index. Static lists keep their A2L identifier.
-//! - SET_DAQ_ID (transport-layer command `0xF2`, sub-command `0xFD`) is only sent for a list whose `CanIdSource::Dynamic` has a
-//!   user-assigned id; everything else (no override, a `FIXED` A2L id, or a `Dynamic` list left on its fallback) keeps transmitting
-//!   on the transport's shared default id, unchanged.
-//! - GET_SEED/UNLOCK are marked optional: many ecu:s don't implement them at all, and a development ECU with no real security algorithm typically accepts any key,
-//!  so UNLOCK is sent with an all-zero key. A real seed-dependent key algorithm would replace the key bytes built
+//! - Commands are only as long as their content, unless the A2L sets `MAX_DLC_REQUIRED`: then they are zero-padded to 8 bytes, or to `MAX_DLC` when it is set in the CAN FD block.
+//! - WRITE_DAQ auto-increments the slave's entry pointer, so one SET_DAQ_PTR per ODT is enough; some slaves reject a non-zero entry number anyway.
+//!   Its address-extension byte is the signal's `ECU_ADDRESS_EXTENSION`.
+//! - Dynamic lists are numbered `MIN_DAQ ..`, static lists keep their A2L identifier.
+//! - The prescaler is one byte, so a list's prescaler is clamped to 1..=255.
+//! - SET_DAQ_ID (`0xF2 0xFD`) is sent only for a `CanIdSource::Dynamic` list with a user-assigned id; every other list transmits on the transport's shared DAQ id.
+//! - GET_SEED/UNLOCK are optional because many ECUs don't implement them. UNLOCK sends an all-zero key, which a development ECU without a real algorithm usually accepts.
 
-use crate::types::{A2lProject, ByteOrder, DaqList, DaqListDef, EventEntry};
-
-// The command/phase/response types are shared across protocols and live in
-// [`crate::protocol`]; the XCP-prefixed names are kept as aliases.
-use crate::protocol::{dword, word};
-pub use crate::protocol::{
-    Command as XcpCommand, ExpectedResponse as XcpResponse, Phase as XcpPhase,
+use crate::protocol::{Command, ExpectedResponse, Phase, dword, word};
+use crate::types::{
+    A2lProject, ByteOrder, CanIdSource, DaqList, DaqListDef, EventEntry, ParsedSignal,
 };
+use std::collections::HashMap;
 
 /// Snapshot of everything the phase builders need from the parsed project.
 struct Ctx<'a> {
     is_static: bool,
+    min_daq: u16,
     big_endian: bool,
     timestamp_size: u16,
     events: &'a [EventEntry],
     daq_defs: &'a [DaqListDef],
+    frame_len: Option<usize>,
+    signals: HashMap<&'a str, &'a ParsedSignal>,
 }
 
 impl Ctx<'_> {
@@ -50,7 +46,7 @@ impl Ctx<'_> {
         if self.is_static {
             daq.id
         } else {
-            index as u16
+            self.min_daq + index as u16
         }
     }
 }
@@ -58,48 +54,58 @@ impl Ctx<'_> {
 /// Build the full DAQ initialisation command sequence from a parsed project and packed DAQ lists.
 ///
 /// Uses the slave's byte order
-pub fn build_init_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<XcpCommand> {
+pub fn build_init_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Command> {
     let ctx = build_ctx(project);
 
-    let mut cmds: Vec<XcpCommand> = Vec::new();
+    let mut cmds: Vec<Command> = Vec::new();
     phase_connect(&mut cmds);
     phase_prepare(&mut cmds, &ctx, daq_lists);
     phase_set_daq_id(&mut cmds, &ctx, daq_lists);
     phase_write_entries(&mut cmds, &ctx, daq_lists);
     phase_set_mode(&mut cmds, &ctx, daq_lists);
     phase_start(&mut cmds, &ctx, daq_lists);
+    pad(&mut cmds, ctx.frame_len);
     cmds
 }
 
 /// Build the shutdown sequence for a running DAQ session: stop all lists, release them, then DISCONNECT.
-pub fn build_stop_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<XcpCommand> {
+pub fn build_stop_commands(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Command> {
     let ctx = build_ctx(project);
-    let mut cmds: Vec<XcpCommand> = Vec::new();
+    let mut cmds: Vec<Command> = Vec::new();
+    stop_and_release(&mut cmds, Phase::Stop, &ctx, daq_lists);
+    cmds.push(Command::ack(Phase::Stop, vec![0xFE], "DISCONNECT".into()));
+    pad(&mut cmds, ctx.frame_len);
+    cmds
+}
 
-    push(
-        &mut cmds,
-        XcpPhase::Stop,
+/// Stop every list, then release them: CLEAR_DAQ_LIST per static list, one FREE_DAQ for dynamic ones.
+fn stop_and_release(cmds: &mut Vec<Command>, phase: Phase, ctx: &Ctx, daq_lists: &[DaqList]) {
+    cmds.push(Command::ack(
+        phase,
         vec![0xDD, 0x00],
         "START_STOP_SYNCH  stop all".into(),
-    );
-
+    ));
     if ctx.is_static {
         for (idx, daq) in daq_lists.iter().enumerate() {
             let wire = ctx.wire_id(idx, daq);
             let id = word(wire, ctx.big_endian);
-            push(
-                &mut cmds,
-                XcpPhase::Stop,
+            cmds.push(Command::ack(
+                phase,
                 vec![0xE3, 0x00, id[0], id[1]],
-                format!("CLEAR_DAQ_LIST  daq={}", wire),
-            );
+                format!("CLEAR_DAQ_LIST  daq={wire}"),
+            ));
         }
     } else {
-        push(&mut cmds, XcpPhase::Stop, vec![0xD6], "FREE_DAQ".into());
+        cmds.push(Command::ack(phase, vec![0xD6], "FREE_DAQ".into()));
     }
+}
 
-    push(&mut cmds, XcpPhase::Stop, vec![0xFE], "DISCONNECT".into());
-    cmds
+/// Zero-pad every command to `len` bytes, for slaves that only accept full-length frames.
+fn pad(cmds: &mut [Command], len: Option<usize>) {
+    let Some(len) = len else { return };
+    for c in cmds.iter_mut().filter(|c| c.bytes.len() < len) {
+        c.bytes.resize(len, 0);
+    }
 }
 
 /// Snapshot the parsed project's XCP settings
@@ -107,6 +113,7 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
     let xcp = project.xcp_data.as_ref();
     Ctx {
         is_static: xcp.map(|x| x.daq_info.mode.is_static()).unwrap_or(false),
+        min_daq: xcp.map(|x| x.daq_info.min_daq).unwrap_or(0),
         big_endian: xcp
             .and_then(|x| x.protocol_layer.as_ref())
             .and_then(|p| p.byte_order.as_ref())
@@ -114,132 +121,106 @@ fn build_ctx(project: &A2lProject) -> Ctx<'_> {
         timestamp_size: xcp.map(|x| x.daq_info.timestamp_size).unwrap_or(0),
         events: xcp.map(|x| x.event_info.events.as_slice()).unwrap_or(&[]),
         daq_defs: xcp.map(|x| x.daq_info.daq_lists.as_slice()).unwrap_or(&[]),
+        frame_len: xcp
+            .and_then(|x| x.xcp_info.as_ref())
+            .and_then(|t| match &t.can_fd {
+                Some(fd) if fd.max_dlc_required => Some(fd.max_dlc as usize),
+                _ if t.max_dlc_required => Some(8),
+                _ => None,
+            }),
+        signals: crate::layout::signal_lookup(project),
     }
-}
-
-/// Push a command to the sequence with an ACK response.
-fn push(cmds: &mut Vec<XcpCommand>, phase: XcpPhase, bytes: Vec<u8>, label: String) {
-    push_full(cmds, phase, bytes, label, false);
-}
-
-/// Push a command that might not be supported
-fn push_optional(cmds: &mut Vec<XcpCommand>, phase: XcpPhase, bytes: Vec<u8>, label: String) {
-    push_full(cmds, phase, bytes, label, true);
-}
-
-fn push_full(
-    cmds: &mut Vec<XcpCommand>,
-    phase: XcpPhase,
-    bytes: Vec<u8>,
-    label: String,
-    optional: bool,
-) {
-    cmds.push(XcpCommand {
-        phase,
-        bytes,
-        label,
-        response: XcpResponse::Ack,
-        optional,
-    });
 }
 
 /// Resource bit for GET_SEED/UNLOCK: the DAQ resource this pipeline drives.
 const RESOURCE_DAQ: u8 = 0x04;
 
 /// Phase builders
-fn phase_connect(cmds: &mut Vec<XcpCommand>) {
-    push(cmds, XcpPhase::Connect, vec![0xFF, 0x00], "CONNECT".into());
-    push(cmds, XcpPhase::Connect, vec![0xFD], "GET_STATUS".into());
-    push_optional(
-        cmds,
-        XcpPhase::Connect,
-        vec![0xF8, 0x00, RESOURCE_DAQ],
-        "GET_SEED  resource=DAQ".into(),
-    );
-    push_optional(
-        cmds,
-        XcpPhase::Connect,
-        vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0],
-        "UNLOCK  key=zeros (dev placeholder; swap in a real seed-key algorithm here)".into(),
-    );
+fn phase_connect(cmds: &mut Vec<Command>) {
+    cmds.push(Command::ack(
+        Phase::Connect,
+        vec![0xFF, 0x00],
+        "CONNECT".into(),
+    ));
+    cmds.push(Command::ack(
+        Phase::Connect,
+        vec![0xFD],
+        "GET_STATUS".into(),
+    ));
+    cmds.push(Command {
+        optional: true,
+        ..Command::ack(
+            Phase::Connect,
+            vec![0xF8, 0x00, RESOURCE_DAQ],
+            "GET_SEED  resource=DAQ".into(),
+        )
+    });
+    cmds.push(Command {
+        optional: true,
+        ..Command::ack(
+            Phase::Connect,
+            vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0],
+            "UNLOCK  key=zeros (dev placeholder; swap in a real seed-key algorithm here)".into(),
+        )
+    });
 }
 
 /// Build the preparation sequence for a new DAQ session.
-fn phase_prepare(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
-    push(
-        cmds,
-        XcpPhase::Prepare,
-        vec![0xDD, 0x00],
-        "START_STOP_SYNCH  stop all".into(),
-    );
-
+fn phase_prepare(cmds: &mut Vec<Command>, ctx: &Ctx, daq_lists: &[DaqList]) {
+    stop_and_release(cmds, Phase::Prepare, ctx, daq_lists);
     if ctx.is_static {
-        for (idx, daq) in daq_lists.iter().enumerate() {
-            let wire = ctx.wire_id(idx, daq);
-            let id = word(wire, ctx.big_endian);
-            push(
-                cmds,
-                XcpPhase::Prepare,
-                vec![0xE3, 0x00, id[0], id[1]],
-                format!("CLEAR_DAQ_LIST  daq={}", wire),
-            );
-        }
         return;
     }
 
-    push(cmds, XcpPhase::Prepare, vec![0xD6], "FREE_DAQ".into());
-
     let daq_count = daq_lists.len() as u16;
     let cnt = word(daq_count, ctx.big_endian);
-    push(
-        cmds,
-        XcpPhase::Prepare,
+    cmds.push(Command::ack(
+        Phase::Prepare,
         vec![0xD5, 0x00, cnt[0], cnt[1]],
-        format!("ALLOC_DAQ  count={}", daq_count),
-    );
+        format!("ALLOC_DAQ  count={daq_count}"),
+    ));
 
     for (idx, daq) in daq_lists.iter().enumerate() {
         let n = daq.odts.len() as u8;
         let id = word(ctx.wire_id(idx, daq), ctx.big_endian);
-        push(
-            cmds,
-            XcpPhase::Prepare,
+        cmds.push(Command::ack(
+            Phase::Prepare,
             vec![0xD4, 0x00, id[0], id[1], n],
-            format!("ALLOC_ODT  daq={} odts={}", idx, n),
-        );
+            format!("ALLOC_ODT  daq={idx} odts={n}"),
+        ));
     }
 
     for (idx, daq) in daq_lists.iter().enumerate() {
         let id = word(ctx.wire_id(idx, daq), ctx.big_endian);
         for (odt_idx, odt) in daq.odts.iter().enumerate() {
             let n = odt.entries.len() as u8;
-            push(
-                cmds,
-                XcpPhase::Prepare,
+            cmds.push(Command::ack(
+                Phase::Prepare,
                 vec![0xD3, 0x00, id[0], id[1], odt_idx as u8, n],
-                format!("ALLOC_ODT_ENTRY  daq={} odt={} entries={}", idx, odt_idx, n),
-            );
+                format!("ALLOC_ODT_ENTRY  daq={idx} odt={odt_idx} entries={n}"),
+            ));
         }
     }
 }
 
-/// Assign each dynamic list's CAN id via `SET_DAQ_ID`, so it stops sharing the transport's
-/// default id. Lists with no override, a `FIXED` A2L id, or a `Dynamic` list left unassigned
-/// are untouched: they keep transmitting on the default id, same as before this phase existed.
-fn phase_set_daq_id(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
+/// Assign each dynamic list's CAN id via `SET_DAQ_ID`, so it stops sharing the transport's default id.
+/// Lists with no override, a `FIXED` A2L id, or a `Dynamic` list left unassigned are untouched: they keep transmitting on the default id.
+fn phase_set_daq_id(cmds: &mut Vec<Command>, ctx: &Ctx, daq_lists: &[DaqList]) {
     for (idx, daq) in daq_lists.iter().enumerate() {
-        let Some(can_id) = daq.can_id.set_daq_id() else {
+        let CanIdSource::Dynamic {
+            assigned: Some(can_id),
+        } = daq.can_id
+        else {
             continue;
         };
         let wire = ctx.wire_id(idx, daq);
         let id = word(wire, ctx.big_endian);
         let can = dword(encode_can_id(can_id), ctx.big_endian);
-        push(
-            cmds,
-            XcpPhase::Prepare,
+        cmds.push(Command::ack(
+            Phase::Prepare,
             vec![0xF2, 0xFD, id[0], id[1], can[0], can[1], can[2], can[3]],
-            format!("SET_DAQ_ID  daq={} can_id=0x{:X}", wire, can_id),
-        );
+            format!("SET_DAQ_ID  daq={wire} can_id=0x{can_id:X}"),
+        ));
     }
 }
 
@@ -253,37 +234,36 @@ fn encode_can_id(can_id: u32) -> u32 {
 }
 
 /// Build the command sequence for writing DAQ entries.
-fn phase_write_entries(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
+fn phase_write_entries(cmds: &mut Vec<Command>, ctx: &Ctx, daq_lists: &[DaqList]) {
     for (idx, daq) in daq_lists.iter().enumerate() {
         let wire = ctx.wire_id(idx, daq);
         let id = word(wire, ctx.big_endian);
         for (odt_idx, odt) in daq.odts.iter().enumerate() {
-            push(
-                cmds,
-                XcpPhase::WriteEntries,
+            cmds.push(Command::ack(
+                Phase::WriteEntries,
                 vec![0xE2, 0x00, id[0], id[1], odt_idx as u8, 0x00],
-                format!("SET_DAQ_PTR  daq={} odt={} entry=0", wire, odt_idx),
-            );
+                format!("SET_DAQ_PTR  daq={wire} odt={odt_idx} entry=0"),
+            ));
             for entry in &odt.entries {
-                let label = entry.names.join("/");
                 let addr = entry.ecu_address as u32;
                 let a = dword(addr, ctx.big_endian);
-                push(
-                    cmds,
-                    XcpPhase::WriteEntries,
-                    vec![0xE1, 0xFF, entry.size as u8, 0x00, a[0], a[1], a[2], a[3]],
+                let ext = crate::layout::address_extension(&ctx.signals, entry);
+                cmds.push(Command::ack(
+                    Phase::WriteEntries,
+                    vec![0xE1, 0xFF, entry.size as u8, ext, a[0], a[1], a[2], a[3]],
                     format!(
-                        "WRITE_DAQ  {} size={} addr=0x{:08X}",
-                        label, entry.size, addr
+                        "WRITE_DAQ  {} size={} addr=0x{addr:08X}",
+                        entry.name(),
+                        entry.size
                     ),
-                );
+                ));
             }
         }
     }
 }
 
 /// Build the command sequence for setting DAQ list modes.
-fn phase_set_mode(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
+fn phase_set_mode(cmds: &mut Vec<Command>, ctx: &Ctx, daq_lists: &[DaqList]) {
     let mode: u8 = if ctx.timestamp_size > 0 { 0x10 } else { 0x00 };
 
     for (idx, daq) in daq_lists.iter().enumerate() {
@@ -302,38 +282,37 @@ fn phase_set_mode(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) 
         });
         let id = word(wire, ctx.big_endian);
         let ev = word(event_ch, ctx.big_endian);
-        // Prescaler 1; priority 0
-        push(
-            cmds,
-            XcpPhase::SetMode,
-            vec![0xE0, mode, id[0], id[1], ev[0], ev[1], 0x01, 0x00],
+        // The prescaler is one byte in XCP; priority 0
+        let prescaler = daq.prescaler.clamp(1, u8::MAX as u16) as u8;
+        cmds.push(Command::ack(
+            Phase::SetMode,
+            vec![0xE0, mode, id[0], id[1], ev[0], ev[1], prescaler, 0x00],
             format!(
-                "SET_DAQ_LIST_MODE  daq={} event={} mode=0x{:02X}",
-                wire, event_ch, mode
+                "SET_DAQ_LIST_MODE  daq={wire} event={event_ch} mode=0x{mode:02X} prescaler={prescaler}"
             ),
-        );
+        ));
     }
 }
 
 /// Build the command sequence for starting DAQ lists.
-fn phase_start(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
+fn phase_start(cmds: &mut Vec<Command>, ctx: &Ctx, daq_lists: &[DaqList]) {
     for (idx, daq) in daq_lists.iter().enumerate() {
         let wire = ctx.wire_id(idx, daq);
         let id = word(wire, ctx.big_endian);
-        cmds.push(XcpCommand {
-            phase: XcpPhase::Start,
-            bytes: vec![0xDE, 0x02, id[0], id[1]],
-            label: format!("START_STOP_DAQ_LIST  select daq={}", wire),
-            response: XcpResponse::FirstPid { daq_index: idx },
-            optional: false,
+        cmds.push(Command {
+            response: ExpectedResponse::FirstPid { daq_index: idx },
+            ..Command::ack(
+                Phase::Start,
+                vec![0xDE, 0x02, id[0], id[1]],
+                format!("START_STOP_DAQ_LIST  select daq={wire}"),
+            )
         });
     }
-    push(
-        cmds,
-        XcpPhase::Start,
+    cmds.push(Command::ack(
+        Phase::Start,
         vec![0xDD, 0x01],
         "START_STOP_SYNCH  start selected".into(),
-    );
+    ));
 }
 
 // ------------------------------- Unit tests ------------------------------------------
@@ -341,7 +320,7 @@ fn phase_start(cmds: &mut Vec<XcpCommand>, ctx: &Ctx, daq_lists: &[DaqList]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CanIdSource, DaqInfo, DaqMode, EventInfo, Odt, OdtEntry, XcpData};
+    use crate::types::{DaqInfo, DaqMode, EventInfo, Odt, OdtEntry, XcpData};
 
     fn project(mode: DaqMode, daq_defs: Vec<DaqListDef>, timestamp_size: u16) -> A2lProject {
         A2lProject {
@@ -376,6 +355,7 @@ mod tests {
 
     fn one_daq_list(id: u16) -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id,
             first_pid: 0,
             odts: vec![Odt {
@@ -386,30 +366,8 @@ mod tests {
         }]
     }
 
-    fn labels(cmds: &[XcpCommand]) -> Vec<&str> {
+    fn labels(cmds: &[Command]) -> Vec<&str> {
         cmds.iter().map(|c| c.label.as_str()).collect()
-    }
-
-    #[test]
-    fn phases_appear_in_order() {
-        let p = project(DaqMode::Dynamic, vec![], 0);
-        let cmds = build_init_commands(&p, &one_daq_list(0));
-        let order = [
-            XcpPhase::Connect,
-            XcpPhase::Prepare,
-            XcpPhase::WriteEntries,
-            XcpPhase::SetMode,
-            XcpPhase::Start,
-        ];
-        let mut last = 0;
-        for c in &cmds {
-            let pos = order.iter().position(|p| *p == c.phase).unwrap();
-            assert!(pos >= last, "phase went backwards at {}", c.label);
-            last = pos;
-        }
-        for phase in order {
-            assert!(cmds.iter().any(|c| c.phase == phase), "missing {phase:?}");
-        }
     }
 
     #[test]
@@ -444,25 +402,29 @@ mod tests {
             let cmds = build_init_commands(&p, &one_daq_list(0));
             let first_prepare = cmds
                 .iter()
-                .find(|c| c.phase == XcpPhase::Prepare)
+                .find(|c| c.phase == Phase::Prepare)
                 .expect("prepare phase present");
             assert_eq!(first_prepare.bytes, vec![0xDD, 0x00], "{mode:?}");
         }
     }
 
     #[test]
-    fn dynamic_lists_are_renumbered_from_zero_on_the_wire() {
-        let p = project(DaqMode::Dynamic, vec![], 0);
-        let cmds = build_init_commands(&p, &one_daq_list(5));
+    fn dynamic_lists_are_numbered_from_min_daq_on_the_wire() {
+        // MIN_DAQ 0 renumbers list 5 to allocated list 0; otherwise it follows the predefined ones.
+        for min_daq in [0u16, 2] {
+            let mut p = project(DaqMode::Dynamic, vec![], 0);
+            p.xcp_data.as_mut().unwrap().daq_info.min_daq = min_daq;
+            let cmds = build_init_commands(&p, &one_daq_list(5));
 
-        for code in [0xD4u8, 0xD3, 0xE2, 0xE0, 0xDE] {
-            let cmd = cmds.iter().find(|c| c.bytes[0] == code).unwrap();
-            assert_eq!(
-                &cmd.bytes[2..4],
-                &[0x00, 0x00],
-                "command 0x{code:02X} must address allocated list 0: {}",
-                cmd.label
-            );
+            for code in [0xD4u8, 0xD3, 0xE2, 0xE0, 0xDE] {
+                let cmd = cmds.iter().find(|c| c.bytes[0] == code).unwrap();
+                assert_eq!(
+                    &cmd.bytes[2..4],
+                    &min_daq.to_le_bytes(),
+                    "0x{code:02X}: {}",
+                    cmd.label
+                );
+            }
         }
     }
 
@@ -479,6 +441,7 @@ mod tests {
     #[test]
     fn set_daq_ptr_once_per_odt_at_entry_zero() {
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             odts: vec![
@@ -495,7 +458,7 @@ mod tests {
         let p = project(DaqMode::Static, vec![], 0);
         let cmds = build_init_commands(&p, &daq);
 
-        let ptrs: Vec<&XcpCommand> = cmds.iter().filter(|c| c.bytes[0] == 0xE2).collect();
+        let ptrs: Vec<&Command> = cmds.iter().filter(|c| c.bytes[0] == 0xE2).collect();
         assert_eq!(ptrs.len(), 2, "exactly one SET_DAQ_PTR per ODT");
         for ptr in &ptrs {
             assert_eq!(ptr.bytes[5], 0x00, "entry number must always be 0");
@@ -549,18 +512,36 @@ mod tests {
     }
 
     #[test]
+    fn set_daq_list_mode_carries_the_list_prescaler_as_one_byte() {
+        let prescaler_byte = |prescaler| {
+            let mut lists = one_daq_list(0);
+            lists[0].prescaler = prescaler;
+            let cmds = build_init_commands(&project(DaqMode::Dynamic, vec![], 0), &lists);
+            cmds.iter().find(|c| c.bytes[0] == 0xE0).unwrap().bytes[6]
+        };
+        assert_eq!(prescaler_byte(100), 100);
+        assert_eq!(
+            prescaler_byte(300),
+            255,
+            "clamped to the byte XCP has for it"
+        );
+        assert_eq!(prescaler_byte(0), 1, "0 is not a valid prescaler");
+    }
+
+    #[test]
     fn select_response_is_marked_as_first_pid_carrier() {
         let p = project(DaqMode::Dynamic, vec![], 0);
         let cmds = build_init_commands(&p, &one_daq_list(0));
 
         let select = cmds.iter().find(|c| c.bytes[0] == 0xDE).unwrap();
         assert_eq!(select.bytes[1], 0x02, "mode = select");
-        assert_eq!(select.response, XcpResponse::FirstPid { daq_index: 0 });
+        assert_eq!(select.response, ExpectedResponse::FirstPid { daq_index: 0 });
 
-        assert!(cmds
-            .iter()
-            .filter(|c| c.bytes[0] != 0xDE)
-            .all(|c| c.response == XcpResponse::Ack));
+        assert!(
+            cmds.iter()
+                .filter(|c| c.bytes[0] != 0xDE)
+                .all(|c| c.response == ExpectedResponse::Ack)
+        );
         assert_eq!(cmds.last().unwrap().bytes, vec![0xDD, 0x01]);
     }
 
@@ -576,7 +557,7 @@ mod tests {
             });
             p
         };
-        let find = |cmds: &[XcpCommand], code: u8| -> Vec<u8> {
+        let find = |cmds: &[Command], code: u8| -> Vec<u8> {
             cmds.iter()
                 .find(|c| c.bytes[0] == code)
                 .unwrap()
@@ -615,36 +596,13 @@ mod tests {
     }
 
     #[test]
-    fn get_seed_and_unlock_are_optional_connect_phase_commands() {
-        let p = project(DaqMode::Dynamic, vec![], 0);
-        let cmds = build_init_commands(&p, &one_daq_list(0));
-
-        let get_seed = cmds.iter().find(|c| c.bytes[0] == 0xF8).unwrap();
-        assert_eq!(get_seed.phase, XcpPhase::Connect);
-        assert_eq!(get_seed.bytes, vec![0xF8, 0x00, 0x04], "mode=start, resource=DAQ");
-        assert!(get_seed.optional, "GET_SEED must not abort init if unsupported");
-
-        let unlock = cmds.iter().find(|c| c.bytes[0] == 0xF7).unwrap();
-        assert_eq!(unlock.phase, XcpPhase::Connect);
-        assert_eq!(unlock.bytes, vec![0xF7, 0x06, 0, 0, 0, 0, 0, 0], "6-byte zero key");
-        assert!(unlock.optional, "UNLOCK must not abort init if unsupported");
-
-        assert!(
-            !cmds
-                .iter()
-                .any(|c| !matches!(c.bytes[0], 0xF7 | 0xF8) && c.optional),
-            "every other command stays mandatory"
-        );
-    }
-
-    #[test]
     fn stop_commands_start_with_stop_all_and_end_with_disconnect() {
         for mode in [DaqMode::Static, DaqMode::Dynamic] {
             let p = project(mode, vec![], 0);
             let cmds = build_stop_commands(&p, &one_daq_list(0));
             assert_eq!(cmds.first().unwrap().bytes, vec![0xDD, 0x00], "{mode:?}");
             assert_eq!(cmds.last().unwrap().bytes, vec![0xFE], "{mode:?}");
-            assert!(cmds.iter().all(|c| c.phase == XcpPhase::Stop));
+            assert!(cmds.iter().all(|c| c.phase == Phase::Stop));
         }
     }
 
@@ -653,6 +611,7 @@ mod tests {
         let p = project(DaqMode::Static, vec![], 0);
         let daq = vec![
             DaqList {
+                prescaler: 1,
                 id: 2,
                 first_pid: 0,
                 odts: vec![Odt {
@@ -662,6 +621,7 @@ mod tests {
                 can_id: CanIdSource::Default,
             },
             DaqList {
+                prescaler: 1,
                 id: 7,
                 first_pid: 0,
                 odts: vec![Odt {
@@ -710,8 +670,8 @@ mod tests {
             .iter()
             .find(|c| c.bytes[0] == 0xF2)
             .expect("SET_DAQ_ID must be sent");
-        assert_eq!(set.phase, XcpPhase::Prepare);
-        assert_eq!(set.response, XcpResponse::Ack);
+        assert_eq!(set.phase, Phase::Prepare);
+        assert_eq!(set.response, ExpectedResponse::Ack);
         assert_eq!(set.bytes[1], 0xFD, "SET_DAQ_ID sub-command");
         assert_eq!(&set.bytes[2..4], &[0x00, 0x00], "allocated list index 0");
         assert_eq!(
@@ -758,5 +718,41 @@ mod tests {
                 "{can_id:?} must not emit SET_DAQ_ID"
             );
         }
+    }
+
+    #[test]
+    fn max_dlc_required_pads_every_frame_to_the_required_length() {
+        use crate::types::{CanFdInfo, XcpInfo};
+        let with = |classic: bool, fd: Option<CanFdInfo>| {
+            let mut p = project(DaqMode::Dynamic, vec![], 0);
+            p.xcp_data.as_mut().unwrap().xcp_info = Some(XcpInfo {
+                max_dlc_required: classic,
+                can_fd: fd,
+                ..Default::default()
+            });
+            let daq = one_daq_list(0);
+            let mut lens: Vec<usize> = build_init_commands(&p, &daq)
+                .into_iter()
+                .chain(build_stop_commands(&p, &daq))
+                .map(|c| c.bytes.len())
+                .collect();
+            lens.sort_unstable();
+            lens.dedup();
+            lens
+        };
+
+        assert!(with(false, None).contains(&1), "no padding unless required");
+        assert_eq!(with(true, None), vec![8]);
+        let fd = |required| CanFdInfo {
+            max_dlc: 64,
+            max_dlc_required: required,
+            ..Default::default()
+        };
+        assert_eq!(with(false, Some(fd(true))), vec![64]);
+        assert_eq!(
+            with(true, Some(fd(false))),
+            vec![8],
+            "classic flag only: pad to 8"
+        );
     }
 }

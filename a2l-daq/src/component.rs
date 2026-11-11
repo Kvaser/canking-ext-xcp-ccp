@@ -1,6 +1,6 @@
 //! WASI Preview 2 component bindings.
 //!
-//! Build: `cargo build --lib --target wasm32-wasip2 --no-default-features --features component`
+//! Build: `cargo rustc -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib`
 
 wit_bindgen::generate!({
     world: "a2l-daq",
@@ -10,6 +10,32 @@ wit_bindgen::generate!({
 use exports::kvaser::a2l_daq::generator as bindings;
 
 struct Component;
+
+/// Parse the A2L, build the DAQ lists for `assignments`, and warn about selected signals that didn't survive parsing.
+fn build_core(
+    a2l: &str,
+    source_name: &str,
+    selected: &[String],
+    assignments: Vec<bindings::EventAssignment>,
+    protocol: bindings::Protocol,
+) -> Result<(crate::A2lProject, crate::CoreOutput), String> {
+    let (mut project, rejected) =
+        crate::parse_a2l_with_rejects(a2l, selected).map_err(|e| e.to_string())?;
+    let assignments: Vec<(String, Vec<String>)> = assignments
+        .into_iter()
+        .map(|a| (a.event, a.signals))
+        .collect();
+    let mut core = crate::build(
+        &mut project,
+        &assignments,
+        protocol_from_wit(protocol),
+        source_name,
+    )
+    .map_err(|e| e.to_string())?;
+    core.warnings
+        .extend(crate::dropped_signals(&project, selected, &rejected));
+    Ok((project, core))
+}
 
 impl bindings::Guest for Component {
     fn inspect(a2l: String) -> Result<bindings::A2lSummary, String> {
@@ -24,6 +50,15 @@ impl bindings::Guest for Component {
                 .map(transport_to_wit)
                 .collect(),
             groups: summary.groups.into_iter().map(group_to_wit).collect(),
+            unread: summary
+                .unread
+                .into_iter()
+                .map(|u| bindings::UnreadKeyword {
+                    keyword: u.keyword,
+                    count: u.count,
+                    effect: u.effect,
+                })
+                .collect(),
         })
     }
 
@@ -35,21 +70,7 @@ impl bindings::Guest for Component {
         assignments: Vec<bindings::EventAssignment>,
         protocol: bindings::Protocol,
     ) -> Result<bindings::CoreOutput, String> {
-        let (mut project, rejected) =
-            crate::parse_a2l_with_rejects(&a2l, &selected).map_err(|e| e.to_string())?;
-        let assignments: Vec<(String, Vec<String>)> = assignments
-            .into_iter()
-            .map(|a| (a.event, a.signals))
-            .collect();
-        let mut core = crate::build(
-            &mut project,
-            &assignments,
-            protocol_from_wit(protocol),
-            &source_name,
-        )
-        .map_err(|e| e.to_string())?;
-        core.warnings
-            .extend(crate::dropped_signals(&project, &selected, &rejected));
+        let (_, core) = build_core(&a2l, &source_name, &selected, assignments, protocol)?;
         Ok(core_to_wit(core))
     }
 
@@ -61,23 +82,15 @@ impl bindings::Guest for Component {
         assignments: Vec<bindings::EventAssignment>,
         start_daq: bool,
         daq_can_id_overrides: Vec<(u16, u32)>,
+        daq_prescalers: Vec<(u16, u16)>,
         protocol: bindings::Protocol,
     ) -> Result<bindings::ConfigOutput, String> {
         let proto = protocol_from_wit(protocol);
-        let (mut project, rejected) =
-            crate::parse_a2l_with_rejects(&a2l, &selected).map_err(|e| e.to_string())?;
-        let assignments: Vec<(String, Vec<String>)> = assignments
-            .into_iter()
-            .map(|a| (a.event, a.signals))
-            .collect();
-
-        let mut core = crate::build(&mut project, &assignments, proto, &source_name)
-            .map_err(|e| e.to_string())?;
-        core.warnings
-            .extend(crate::dropped_signals(&project, &selected, &rejected));
+        let (project, mut core) = build_core(&a2l, &source_name, &selected, assignments, protocol)?;
         crate::apply_can_id_overrides(&mut core.daq_lists, &daq_can_id_overrides);
+        crate::apply_prescalers(&mut core.daq_lists, &daq_prescalers);
 
-        let config = crate::Config {
+        let config = protocol_core::config::Config {
             project,
             daq_lists: core.daq_lists,
             start_daq,
@@ -100,36 +113,25 @@ impl bindings::Guest for Component {
         assignments: Vec<bindings::EventAssignment>,
         options: bindings::TscriptOptions,
         daq_can_id_overrides: Vec<(u16, u32)>,
+        daq_prescalers: Vec<(u16, u16)>,
         protocol: bindings::Protocol,
     ) -> Result<bindings::TscriptOutput, String> {
         let proto = protocol_from_wit(protocol);
-        let (mut project, rejected) =
-            crate::parse_a2l_with_rejects(&a2l, &selected).map_err(|e| e.to_string())?;
-        let assignments: Vec<(String, Vec<String>)> = assignments
-            .into_iter()
-            .map(|a| (a.event, a.signals))
-            .collect();
-        let mut core = crate::build(&mut project, &assignments, proto, &source_name)
-            .map_err(|e| e.to_string())?;
-        core.warnings
-            .extend(crate::dropped_signals(&project, &selected, &rejected));
+        let (project, mut core) = build_core(&a2l, &source_name, &selected, assignments, protocol)?;
         crate::apply_can_id_overrides(&mut core.daq_lists, &daq_can_id_overrides);
+        crate::apply_prescalers(&mut core.daq_lists, &daq_prescalers);
 
         // Manual override if chosen, else the A2L transport block's defaults.
-        let (is_fd, bitrate, data_bitrate) = match &options.bus {
+        let (bitrate, data_bitrate) = match &options.bus {
             Some(bus) => {
                 let is_fd = matches!(bus.mode, bindings::CanMode::CanFd);
                 let data =
                     is_fd.then(|| bus.data_bitrate.unwrap_or(crate::DEFAULT_FD_DATA_BITRATE));
-                (is_fd, bus.bitrate, data)
+                (bus.bitrate, data)
             }
             None => {
                 let defaults = crate::bus_defaults(&project, proto);
-                (
-                    defaults.can_fd_data_bitrate.is_some(),
-                    defaults.bitrate,
-                    defaults.can_fd_data_bitrate,
-                )
+                (defaults.bitrate, defaults.can_fd_data_bitrate)
             }
         };
 
@@ -158,29 +160,57 @@ impl bindings::Guest for Component {
                 Some((resolved, crate::TriggerAction::StartLogger))
             };
 
+        let stop_terms = trigger_terms(&options.stop_conditions)?;
+        let resolved_stop = if stop_terms.is_empty() {
+            None
+        } else {
+            Some(
+                crate::resolve_terms(
+                    &stop_terms,
+                    inline,
+                    &project,
+                    &core.daq_lists,
+                    default_can_id.unwrap_or(0),
+                )
+                .map_err(|e| format!("stop condition: {e}"))?,
+            )
+        };
+        if let Some(id) = options.stop_can_id
+            && let Some(why) = crate::stop_can_id_conflict(id, &project, &core.daq_lists, proto)
+        {
+            return Err(why);
+        }
+
         let combo = resolved_trigger.as_ref().map(|(r, a)| (r, *a));
-        let signals = crate::resolve_signal_hooks(inline, &project, &core.daq_lists, proto, combo)
-            .map_err(|e| format!("cannot decode signals in the script: {e}"))?;
-        let decoders = resolved_trigger
-            .map(|(r, _)| r.decoders)
-            .unwrap_or_default();
+        let signals = crate::resolve_signal_hooks(
+            inline,
+            &project,
+            &core.daq_lists,
+            proto,
+            combo,
+            resolved_stop.as_ref(),
+        )
+        .map_err(|e| format!("cannot decode signals in the script: {e}"))?;
+        let decoders = crate::merge_decoders(
+            resolved_trigger
+                .map(|(r, _)| r.decoders)
+                .unwrap_or_default(),
+            resolved_stop.map(|r| r.decoders).unwrap_or_default(),
+        );
 
         let config = crate::TScriptConfig {
-            channels: vec![crate::CanChannel {
+            channel: crate::CanChannel {
                 index: options.channel_index,
                 bitrate,
                 data_bitrate,
-            }],
+            },
             pretrigger_ms: options.pretrigger_ms,
             signals,
             timer_ms: options.timer_ms,
-            daq_init: crate::build_daq_init(
-                proto,
-                &project,
-                &core.daq_lists,
-                crate::DEFAULT_INIT_TIMEOUT_MS,
-            ),
-            can_fd: is_fd,
+            max_captures: options.max_captures,
+            daq_watchdog_ms: options.daq_watchdog_ms,
+            stop_can_id: options.stop_can_id,
+            daq_init: crate::build_daq_init(proto, &project, &core.daq_lists),
             traceability: crate::traceability::traceability_lines(
                 &source_name,
                 &project,
@@ -244,6 +274,7 @@ fn transport_to_wit(t: crate::TransportInfo) -> bindings::TransportInfo {
         can_fd: t.can_fd,
         bitrate: t.bitrate,
         data_bitrate: t.data_bitrate,
+        prescaler: t.prescaler,
     }
 }
 
@@ -355,5 +386,14 @@ fn diag_to_wit(d: crate::Diagnostic) -> bindings::Diagnostic {
         crate::Diagnostic::CollidingNames { sanitized, names } => {
             bindings::Diagnostic::CollidingNames(bindings::CollidingNames { sanitized, names })
         }
+        crate::Diagnostic::UnsupportedConversion {
+            name,
+            conversion,
+            reason,
+        } => bindings::Diagnostic::UnsupportedConversion(bindings::UnsupportedConversion {
+            name,
+            conversion,
+            reason,
+        }),
     }
 }

@@ -2,8 +2,6 @@
 //!
 //! The [`Config`] type is the shared contract between the GUI and this extension.
 
-use std::fmt;
-
 use crate::decode::{Decoder, SignalMeta};
 use crate::state::CommandFrame;
 use protocol_core::protocol::{self, Protocol};
@@ -23,31 +21,10 @@ pub(crate) struct AppliedConfig {
     pub(crate) command_tx_id: Option<u32>,
 }
 
-/// Why a config could not be turned into runtime state.
-#[derive(Debug)]
-pub(crate) enum ConfigError {
-    InvalidJson(serde_json::Error),
-    NoCanId,
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConfigError::InvalidJson(e) => write!(f, "Invalid DAQ Decoder config: {e}"),
-            ConfigError::NoCanId => write!(
-                f,
-                "DAQ Decoder config has no DAQ CAN id, cannot decode DAQ frames"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-/// Turn a parsed config into runtime state
-pub(crate) fn apply_config(cfg: &Config) -> Result<AppliedConfig, ConfigError> {
-    let decoder =
-        Decoder::build(&cfg.project, &cfg.daq_lists, cfg.protocol).ok_or(ConfigError::NoCanId)?;
+/// Turn a parsed config into runtime state, or say why it can't be.
+pub(crate) fn apply_config(cfg: &Config) -> Result<AppliedConfig, String> {
+    let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, cfg.protocol)
+        .ok_or("DAQ Decoder config has no DAQ CAN id, cannot decode DAQ frames")?;
 
     let xcp_info = cfg
         .project
@@ -137,7 +114,7 @@ mod tests {
             .unwrap()
             .can_id_slave = None;
 
-        assert!(matches!(apply_config(&cfg), Err(ConfigError::NoCanId)));
+        assert!(apply_config(&cfg).is_err_and(|e| e.contains("no DAQ CAN id")));
     }
 
     #[test]

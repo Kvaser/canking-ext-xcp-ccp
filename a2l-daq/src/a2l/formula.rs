@@ -55,8 +55,10 @@ pub(super) fn linear_from_formula_var(formula: &str) -> Option<(Option<usize>, f
 fn formula_var_index(name: &str) -> Option<usize> {
     name.strip_prefix('X')
         .or_else(|| name.strip_prefix('x'))
-        .filter(|digits| !digits.is_empty())
-        .and_then(|digits| digits.parse::<usize>().ok())
+        .and_then(|digits| match digits {
+            "" => Some(1),
+            _ => digits.parse::<usize>().ok(),
+        })
         .filter(|&index| index > 0)
 }
 

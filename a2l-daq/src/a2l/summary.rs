@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use super::group::parse_groups;
 use super::tokenizer::{scan_protocols, tokenize_checked};
+use super::unread::{self, UnreadKeyword};
 use super::{
-    event_channels, parse_tokens, selected_refs, A2lParseError, EventEntry, Protocol,
-    RejectedVirtualReason,
+    A2lParseError, EventEntry, Protocol, RejectedVirtualReason, event_channels, parse_tokens,
+    selected_refs,
 };
 
 /// Per-signal metadata
@@ -19,7 +20,6 @@ pub struct SignalSummary {
     pub size: u16,
     pub virtual_input: Option<String>,
     pub virtual_reject: Option<RejectedVirtualReason>,
-    /// Names of the MEASUREMENT GROUPs (if any) that directly reference this signal.
     pub groups: Vec<String>,
 }
 
@@ -39,6 +39,7 @@ pub struct TransportInfo {
     pub can_fd: bool,
     pub bitrate: Option<u32>,
     pub data_bitrate: Option<u32>,
+    pub prescaler: bool,
 }
 
 /// Summary of all signals, events, and protocols declared in an A2L file.
@@ -49,6 +50,7 @@ pub struct A2lSummary {
     pub protocols: Vec<Protocol>,
     pub transports: Vec<TransportInfo>,
     pub groups: Vec<GroupInfo>,
+    pub unread: Vec<UnreadKeyword>,
 }
 
 /// Returns signal metadata, event channels, and declared protocols in a single pass.
@@ -58,25 +60,14 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
     let (project, rejected) = parse_tokens(&tokens, selected_refs(&[]));
 
     // Map each measurement name to the GROUPs that directly reference it.
-    let parsed_groups = parse_groups(&tokens);
     let mut membership: HashMap<String, Vec<String>> = HashMap::new();
-    for g in &parsed_groups {
-        for m in &g.measurements {
-            membership
-                .entry(m.clone())
-                .or_default()
-                .push(g.name.clone());
+    let mut groups = Vec::new();
+    for (group, measurements) in parse_groups(&tokens) {
+        for m in measurements {
+            membership.entry(m).or_default().push(group.name.clone());
         }
+        groups.push(group);
     }
-    let groups: Vec<GroupInfo> = parsed_groups
-        .into_iter()
-        .map(|g| GroupInfo {
-            name: g.name,
-            description: g.description,
-            root: g.root,
-            sub_groups: g.sub_groups,
-        })
-        .collect();
 
     // Build a summary of all signals
     let mut signals: Vec<SignalSummary> = project
@@ -128,6 +119,10 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
                     can_fd: fd.is_some(),
                     bitrate: info.and_then(|i| i.baudrate),
                     data_bitrate: fd.and_then(|f| f.data_baudrate),
+                    prescaler: project
+                        .xcp_data
+                        .as_ref()
+                        .is_some_and(|x| x.daq_info.prescaler_supported),
                 }
             }
             Protocol::Ccp => TransportInfo {
@@ -135,6 +130,7 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
                 can_fd: false,
                 bitrate: project.ccp_data.as_ref().and_then(|c| c.info.baudrate),
                 data_bitrate: None,
+                prescaler: true,
             },
         })
         .collect();
@@ -152,5 +148,6 @@ pub fn inspect(content: &str) -> Result<A2lSummary, A2lParseError> {
         protocols,
         transports,
         groups,
+        unread: unread::scan(&tokens),
     })
 }

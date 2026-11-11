@@ -1,59 +1,67 @@
 # DAQ Configurator
 
-The DAQ Configurator is a customized workspace pane for setting up DAQ lists. These can either be used through CanKing with any compatible interface when connected to an ECU or saved as artefacts (DBC file and t-script file).
+A CanKing workspace view that sets up DAQ measurements from an A2L file. The result runs in CanKing, with any compatible
+Kvaser interface connected to the ECU, or as files: a DBC and a t-script for a Memorator logger.
+
+Requires Kvaser CanKing 7.6 or later. Supports XCP on CAN and CAN FD, and CCP on CAN.
 
 ## Overview
 
-This pane allows the user to read in an A2L file, filter & select through available measurement signals, assign to available events, optionally set up a t-script with trigger, and lastly, apply to a CanKing data-processor and download needed artefacts. When used in CanKing, it is best set up together with a Message Trace or Signal Plot. After starting a measurement the data-processor sends out CAN frames to the ECU to initiate DAQ with the provided config. The ECU will then send out frames with the requested data and interval. In the Message Trace the CAN frames will be tagged "DAQ" and to decode them the "Fixed Position" option in the top-left of the pane needs to be toggled. In the Signal Plot the signals need to be selected to show up in subsequent measurements.
+Load an A2L, select signals, assign them to events, optionally configure a t-script, then apply the setup to a DAQ Decoder data processor and download the files.
+Once a measurement starts, the data processor sends the DAQ commands to the ECU and the ECU streams the selected signals back.
 
-## Support
+Use this extension with a Message Trace or a Signal Plot. In the Message Trace the DAQ frames are named "DAQ"; turn on "Fixed Position" (top left of the trace) to see them decoded. 
+In the Signal Plot, add the signals to be tracked and they appear in later measurements.
 
-Currently, DAQ Configurator supports XCP and CCP as measurement protocols and CAN as transport protocol.
+## The five steps
 
-## Usage
+### Load A2L
 
-The extension comes in the form of a 5-step wizard:
+Pick an `.a2l` file. The view shows the protocols, signal and event counts and the bus settings it found. If the file declares both XCP and CCP, choose one of them.
 
-### - Load A2L
+A warning lists any keywords in the file that change the results but that the configurator does not read, for example `/include` or a relative PID field. Outputs that depend on them may be wrong.
 
-Select a .a2l file from your machine to start. Some general information about available protocols, signals and events will show. If the a2l supports several protocols one has to be picked and the extension will work toward the chosen protocol.
+### Select signals
 
-### - Select Signals
+Search by name, description or unit, filter by measurement group (a group includes its sub-groups), and sort by size.
+Virtual signals are marked. A signal that can't be measured shows why.
 
-A scrollview with the available signals will show up which can be searched (by name, description or unit), filtered by measurement group (when the A2L declares groups; a group includes its sub-groups) and sorted by size. Virtual signals are marked as such and if a signal is not available for measurement through the extension then the reason will be shown.
+### Assign events
 
-### - Assign events
+Assign each signal to one of the ECU's events, or keep the event the A2L gives it. Each DAQ list belongs to one event.
 
-Assign each signal to any available event. One DAQ-list can only belong to one event.
+### Configure t-script
 
-### - Configure t-script
+Options for the downloadable t-script:
 
-In this section different options related to the Memorator t-script can be set if that is the goal with this extension.
+- **CAN bus**: override the A2L's bit rate and CAN FD settings.
+- **Trigger**: signal, operator and value. Several conditions must all hold.
+- **Stop**: conditions in the same form, and a **Stop frame CAN id**. When the conditions hold or a frame with that id arrives, the script stops logging and stops DAQ on the ECU for good.
+- **Logging**: CAN channel, pretrigger time, and **Stop logging after** a time.
+- **Captures** (with a stop time, default 1): after each capture the script waits until the trigger condition has been false, and starts the next capture when it turns true again.
+  DAQ keeps running in between. After the last capture the script stops DAQ on the ECU. Leave it blank for no limit.
+- **Restart DAQ after silence**: the script checks once per this period that DAQ frames still arrive. If none did, for example because the ECU restarted, it sets up DAQ again 5 s later: one to two periods plus 5 s after the last frame.
+  Leave it blank to never do that. A DAQ setup the ECU doesn't answer always starts over after 5 seconds.
+- **Standalone t-script**: the script decodes the signals itself, so it compiles without the DBC.
 
-#### Options
-- Override A2L bus settings - toggle to be able to manually set the bit rate to a different value.
-- Trigger - select signal, operator and value. Several conditions are AND'ed together.
-- Logging options - customize the CAN channel index, pretrigger time (ms) and if the logging should stop after a certain time.
+DAQ on the ECU only stops when the script tells it to: after the last capture, on the stop condition or stop frame, or when the script is stopped. 
+If the logger loses power or is unplugged while DAQ runs, the ECU keeps sending DAQ frames until something else stops it or it restarts, much like a car left running.
 
-It is also possible to avoid needing the DBC file when compiling the t-script. Checking "Standalone t-script (no DBC needed, experimental feature)" will embed the extra structs and decoders needed for the t-script to retrieve the correct values from the CAN frames.
+### Apply & export
 
-### - Apply & export
+Choose the source the data processor reads from, and whether it starts DAQ on the ECU when a measurement starts.
+**Apply to data processor** creates the data processor, or updates the one created before. Then the DBC, the t-script and the JSON config can be downloaded.
 
-Choose the source that the data-processor should latch on to and whether it should start DAQ with the given config on measurement start. Pressing "Apply to data processor" will compile the config, create a data-processor node and inject the config to it. After that, the option to download the DBC file, the t-script and the json config will be available.
+The **DAQ lists** table shows each list, its event and its CAN id:
 
-#### DAQ list CAN identifiers
+- **Shared**: the list uses the default DAQ id (`CAN_ID_SLAVE` for XCP, the DTO id for CCP), multiplexed by PID.
+- **Fixed**: the A2L fixes the list's id (XCP `DAQ_LIST_CAN_ID ... FIXED`, CCP `CAN_ID_FIXED`).
+- **A text field**: the A2L lets the id be assigned. Enter one (decimal, or hex with `0x`) and the data processor sets it when it starts DAQ; leave it blank to share the default id.
 
-This step also lists every packed DAQ list together with the CAN identifier it transmits on:
+A **Prescaler** column appears when the ECU supports it. A list with prescaler n is sent on every n-th cycle of its event. Blank means 1.
 
-- **Shared** - the list has no override and shares the transport's default id (`CAN_ID_SLAVE` for XCP, the DTO id for CCP), multiplexed by PID.
-- **Fixed** - the A2L declares this list's id (XCP `DAQ_LIST_CAN_ID ... FIXED`, or CCP `CAN_ID_FIXED`). 
+## Practical information
 
-- An empty, editable field - the A2L declares this list's id as runtime-assignable. Enter a CAN id (hex with a `0x` prefix, or decimal) to have the extension set the id for that list as part of the init sequence; leave it blank to keep sharing the default id.
-
-## Practical Information
-
-- Make sure that the bus parameters for the CAN channel match the A2L or, if the ECU expects something different, try different baudrates until commands are responded to on the slave_id.
-
-- The PID present in the config is only read from the A2L or an estimate and might not exist at all. The ECU responds with the correct information at runtime and the data processor adjusts accordingly, but the config and the generated artefacts will still have the old PID for each DAQ list.
-
-- Setting the log level to "Debug" could reveal a lot more of what is happening in case something is not working correctly.
+- The CAN channel's bus settings must match the ECU. When the A2L is wrong, try other bit rates until the ECU answers.
+- The PIDs in the config and the files come from the A2L or are estimated. The data processor corrects them from the ECU's replies while it runs, but the downloaded files keep the original values.
+- Set CanKing's log level to Debug to see more of what the data processor does.

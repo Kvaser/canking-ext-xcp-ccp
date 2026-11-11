@@ -8,6 +8,14 @@
 //! - [`protocol`] - protocol selection ([`protocol::Protocol`]) and dispatch for DAQ command generation and response classification.
 //! - [`types`] - the parsed-A2L and packed-DAQ-list data model.
 //! - [`xcp`] - the XCP implementation: transport-agnostic DAQ command generation.
+//!
+//! ```
+//! use protocol_core::{Protocol, protocol::build_init_commands, types::{A2lProject, XcpData}};
+//!
+//! let project = A2lProject { xcp_data: Some(XcpData::default()), ..Default::default() };
+//! let commands = build_init_commands(Protocol::Xcp, &project, &[]);
+//! assert_eq!(commands[0].bytes, [0xFF, 0x00], "CONNECT, normal mode");
+//! ```
 
 pub mod ccp;
 pub mod layout;

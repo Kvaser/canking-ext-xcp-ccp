@@ -1,6 +1,6 @@
 [package]
 name = "protocol-core"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 authors.workspace = true
 license.workspace = true
@@ -15,9 +15,6 @@ serde_json = "1"
 
 [features]
 serde = ["dep:serde"]
-
-[lib]
-crate-type = ["rlib"]
 
 [[example]]
 name = "dump_default_config"

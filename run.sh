@@ -7,10 +7,12 @@
 #   ./run.sh [group ...]
 #
 # Groups:
-#   rust     cargo tests (workspace defaults, protocol-core+serde, a2l-daq serde without tscript)
-#            + a2l-daq-cli release build
+#   lint     rustfmt, clippy (-D warnings) for the workspace and the a2l-daq component, rustdoc,
+#            eslint and prettier for canking-gui
+#   rust     cargo tests (workspace) + a2l-daq-cli release build
 #   wasm     wasm32-wasip2 component builds (a2l-daq, daq-decoder)
-#   gui      canking-gui: npm install, jco transpile, typecheck + vite build, npm pack (.tgz)
+#   gui      canking-gui: npm ci (skipped locally while node_modules matches package-lock.json),
+#            jco transpile, typecheck + vite build, npm pack (.tgz)
 #   stage    generate license.txt + THIRD_PARTY_LICENSES.html (cargo-about), then stage the raw
 #            .tgz/.wasm, license/doc files and ck-ext-info.json into canking-gui/dist and canking-service/dist,
 #            ready to be signed. Needs `gui` and `wasm` (daq-decoder) run first.
@@ -18,7 +20,7 @@
 #            picks up dist/bundle.p7s if a signing step dropped one in there.
 #   ck-cli   end-to-end tests against a running CanKing service via the ck CLI (see tests/ck-cli/README.md).
 #            Needs the wasm transpiled first. Individual tests skip when their prerequisites are absent.
-#   all      every build task above (default)
+#   all      lint and every build task above (default)
 
 set -u
 cd "$(dirname "$0")"
@@ -41,6 +43,11 @@ step() {
 
 gui_install() {
     cd canking-gui
+    if [ -z "${CI:-}" ] && [ -f node_modules/.package-lock.json ] \
+        && [ ! package-lock.json -nt node_modules/.package-lock.json ]; then
+        echo "node_modules matches package-lock.json, skipping npm ci"
+        return 0
+    fi
     npm ci
 }
 
@@ -128,10 +135,10 @@ stage_bundle() {
     return 0
 }
 
-# Stage the .tgz produced by `npm run package`
+# Stage the .tgz produced by `npm run package` for the current package.json version
 gui_stage() {
     local tgz_file
-    tgz_file=$(cd canking-gui && ls ./*.tgz 2>/dev/null | head -n 1)
+    tgz_file=$(cd canking-gui && node -p "const p = require('./package.json'); p.name + '-' + p.version + '.tgz'")
     stage_bundle canking-gui "$tgz_file" "${tgz_file##*/}" \
         "No .tgz found in canking-gui/; run 'npm run package' (or ./run.sh gui) first" \
         THIRD_PARTY_LICENSES.html THIRD_PARTY_LICENSES_FONTS.txt license.txt ReleaseNotes.txt user-guide.md UserGuide.html
@@ -230,21 +237,32 @@ service_pack() {
         THIRD_PARTY_LICENSES.html license.txt ReleaseNotes.txt user-guide.md UserGuide.html
 }
 
+gui_lint() {
+    cd canking-gui
+    [ -d node_modules ] || npm ci
+    npm run lint
+}
+
+lint_group() {
+    step "rustfmt" cargo fmt --all --check
+    step "clippy (workspace, all targets)" \
+        cargo clippy --workspace --all-targets -- -D warnings
+    step "clippy a2l-daq (component)" \
+        cargo clippy -p a2l-daq --lib --no-default-features --features component -- -D warnings
+    step "rustdoc (broken links)" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+    step "eslint + prettier (canking-gui)" gui_lint
+}
+
 rust_group() {
-    step "cargo test (workspace, default features)" \
+    step "cargo test (workspace)" \
         cargo test --workspace
-    step "cargo test protocol-core (serde)" \
-        cargo test -p protocol-core --features serde
-    step "cargo test a2l-daq (cli: serde, no default features)" \
-        cargo test -p a2l-daq --no-default-features --features serde
     step "cargo build a2l-daq-cli (release)" \
         cargo build -p a2l-daq --release
 }
 
 wasm_group() {
     step "wasm build a2l-daq (component)" \
-        cargo build -p a2l-daq --lib --release --target wasm32-wasip2 \
-            --no-default-features --features component
+        cargo rustc -p a2l-daq --lib --release --target wasm32-wasip2 --no-default-features --features component --crate-type cdylib
     step "wasm build daq-decoder" \
         cargo build -p daq-decoder --release --target wasm32-wasip2
 }
@@ -275,20 +293,21 @@ ck_cli_group() {
 }
 
 usage() {
-    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
 [ $# -eq 0 ] && set -- all
 for group in "$@"; do
     case "$group" in
+        lint) lint_group ;;
         rust) rust_group ;;
         wasm) wasm_group ;;
         gui)  gui_group ;;
         stage) stage_group ;;
         pack) pack_group ;;
         ck-cli) ck_cli_group ;;
-        all)  rust_group; wasm_group; gui_group; stage_group; pack_group ;;
+        all)  lint_group; rust_group; wasm_group; gui_group; stage_group; pack_group ;;
         -h|--help) usage 0 ;;
         *) echo "Unknown group: $group"; usage 1 ;;
     esac

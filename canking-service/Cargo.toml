@@ -1,6 +1,6 @@
 [package]
 name = "daq-decoder"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "DAQ decoder for CanKing"
 authors.workspace = true
@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 wit-bindgen = "0.58.0"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 protocol-core = { path = "../protocol-core", features = ["serde"] }
 

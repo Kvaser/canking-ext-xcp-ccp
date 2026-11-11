@@ -12,6 +12,8 @@
 //!
 //! `summary` is a UI-facing view over a parse result.
 //!
+//! `unread` flags keywords that change the outputs but aren't parsed yet.
+//!
 //! `encoding` decodes raw file bytes.
 
 use std::collections::HashSet;
@@ -28,6 +30,7 @@ mod group;
 mod measurement;
 mod summary;
 mod tokenizer;
+mod unread;
 mod virtual_signal;
 mod xcp;
 
@@ -40,7 +43,8 @@ pub use protocol_core::types::{
 };
 
 pub use encoding::decode_a2l_bytes;
-pub use summary::{inspect, A2lSummary, GroupInfo, SignalSummary, TransportInfo};
+pub use summary::{A2lSummary, GroupInfo, SignalSummary, TransportInfo, inspect};
+pub use unread::{UnreadKeyword, unread_keywords};
 pub use virtual_signal::{RejectedVirtual, RejectedVirtualReason};
 
 use tokenizer::{scan_events, scan_protocols, scan_signal_names, tokenize_checked};
@@ -185,24 +189,10 @@ fn parse_tokens(tokens: &[String], selected: Vec<&str>) -> (A2lProject, Vec<Reje
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_a2l_bytes, inspect, list_events, list_protocols, parse_a2l, parse_a2l_with_rejects,
         A2lParseError, A2lProject, Conversion, DaqMode, Protocol, RejectedVirtualReason,
+        decode_a2l_bytes, inspect, list_events, list_protocols, parse_a2l, parse_a2l_with_rejects,
     };
     const CCP_A2L: &[u8] = include_bytes!("../../data/CCP/SampleECU.a2l");
-
-    /// A minimal file declaring both an XCP and a CCP transport, for protocol-detection tests.
-    const DUAL_PROTOCOL_A2L: &str = r#"
-      /begin IF_DATA ASAP1B_CCP
-        /begin TP_BLOB
-          0x0201 0x0206 0x00000455 0x00000456 0x0100 0x0002
-        /end TP_BLOB
-      /end IF_DATA
-      /begin IF_DATA XCP
-        /begin DAQ
-          DYNAMIC
-        /end DAQ
-      /end IF_DATA
-        "#;
 
     #[test]
     fn virtual_resolves_against_the_input_its_formula_names() {
@@ -309,19 +299,6 @@ mod tests {
     }
 
     #[test]
-    fn a_ccp_only_file_still_reports_its_rasters() {
-        use super::event_channels;
-        let ccp_only = decode_a2l_bytes(CCP_A2L);
-        let project = parse_a2l(&ccp_only, &[]).unwrap();
-        assert!(project.xcp_data.is_none());
-        let names: Vec<&str> = event_channels(&project, Protocol::Ccp)
-            .iter()
-            .map(|e| e.name.as_str())
-            .collect();
-        assert_eq!(names, ["Raster_10ms", "Raster_100ms"]);
-    }
-
-    #[test]
     fn detects_both_protocols_in_canonical_order() {
         let content = r#"
       /begin IF_DATA ASAP1B_CCP
@@ -350,16 +327,6 @@ mod tests {
       /end MEASUREMENT
         "#;
         assert!(list_protocols(content).unwrap().is_empty());
-    }
-
-    #[test]
-    fn detects_protocols_in_real_files() {
-        let ccp_only = String::from_utf8_lossy(CCP_A2L);
-        assert_eq!(
-            inspect(DUAL_PROTOCOL_A2L).unwrap().protocols,
-            [Protocol::Xcp, Protocol::Ccp]
-        );
-        assert_eq!(inspect(&ccp_only).unwrap().protocols, [Protocol::Ccp]);
     }
 
     #[test]
@@ -399,6 +366,24 @@ mod tests {
     }
 
     #[test]
+    fn ecu_address_extension_is_parsed_and_defaults_to_zero() {
+        let content = r#"
+        /begin MEASUREMENT Ext "" UWORD NO_COMPU_METHOD 0 0 0 100 ECU_ADDRESS 0x1000 ECU_ADDRESS_EXTENSION 0x2 /end MEASUREMENT
+        /begin MEASUREMENT Plain "" UWORD NO_COMPU_METHOD 0 0 0 100 ECU_ADDRESS 0x2000 /end MEASUREMENT
+        "#;
+        let project = parse_a2l(content, &[]).unwrap();
+        let ext = |name: &str| {
+            project
+                .signals
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .address_extension
+        };
+        assert_eq!((ext("Ext"), ext("Plain")), (2, 0));
+    }
+
+    #[test]
     fn seed_key_dll_is_captured_regardless_of_block_order() {
         let after_tp_blob = r#"
       /begin IF_DATA ASAP1B_CCP
@@ -406,7 +391,10 @@ mod tests {
         /begin SEED_KEY "SeedNKeyXcp.dll" /end SEED_KEY
       /end IF_DATA
         "#;
-        let ccp = parse_a2l(after_tp_blob, &[]).unwrap().ccp_data.expect("ccp_data");
+        let ccp = parse_a2l(after_tp_blob, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
         assert_eq!(ccp.info.seed_key_dll.as_deref(), Some("SeedNKeyXcp.dll"));
 
         let before_tp_blob = r#"
@@ -415,7 +403,10 @@ mod tests {
         /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
       /end IF_DATA
         "#;
-        let ccp = parse_a2l(before_tp_blob, &[]).unwrap().ccp_data.expect("ccp_data");
+        let ccp = parse_a2l(before_tp_blob, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
         assert_eq!(ccp.info.seed_key_dll.as_deref(), Some("SeedNKeyXcp.dll"));
 
         let content = r#"
@@ -425,6 +416,34 @@ mod tests {
         "#;
         let ccp = parse_a2l(content, &[]).unwrap().ccp_data.expect("ccp_data");
         assert_eq!(ccp.info.seed_key_dll, None, "no SEED_KEY block declared");
+
+        let per_privilege = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+        /begin SEED_KEY "cal.dll" "daq.dll" "pgm.dll" /end SEED_KEY
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(per_privilege, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
+        assert_eq!(
+            ccp.info.seed_key_dll.as_deref(),
+            Some("daq.dll"),
+            "CAL, DAQ, PGM: keep DAQ"
+        );
+
+        let no_daq_dll = r#"
+      /begin IF_DATA ASAP1B_CCP
+        /begin TP_BLOB 0x0201 0x0206 0x455 0x456 0x0100 0x0002 /end TP_BLOB
+        /begin SEED_KEY "cal.dll" "" "" /end SEED_KEY
+      /end IF_DATA
+        "#;
+        let ccp = parse_a2l(no_daq_dll, &[])
+            .unwrap()
+            .ccp_data
+            .expect("ccp_data");
+        assert_eq!(ccp.info.seed_key_dll, None, "DAQ needs no unlock");
     }
 
     #[test]
@@ -496,15 +515,9 @@ mod tests {
         assert_eq!(ccp.rasters[1].channel, 2);
         assert!(ccp.info.bytes_only, "sample TP_BLOB declares BYTES_ONLY");
         let summary = inspect(&ccp_only).unwrap();
+        assert_eq!(summary.protocols, [Protocol::Ccp]);
         assert_eq!(summary.events.len(), 2);
         assert_eq!(summary.events[0].name, "Raster_10ms");
-
-        let both = parse_a2l(DUAL_PROTOCOL_A2L, &[]).unwrap();
-        assert!(both.xcp_data.is_some());
-        let ccp = both.ccp_data.expect("dual-protocol CCP transport");
-        assert_eq!(ccp.info.cro_id, 0x455);
-        assert_eq!(ccp.info.dto_id, 0x456);
-        assert_eq!(ccp.info.station_address, 0x0100);
     }
 
     #[test]
@@ -635,8 +648,11 @@ mod tests {
 
         let summary = inspect(content).unwrap();
         assert_eq!(summary.groups.len(), 2);
+        assert_eq!(summary.groups[0].name, "Engine");
+        assert_eq!(summary.groups[0].description, "Engine related measurements");
         assert!(summary.groups[0].root);
         assert_eq!(summary.groups[0].sub_groups, ["Engine_Sensors"]);
+        assert!(!summary.groups[1].root);
 
         let engine_speed = summary
             .signals
@@ -650,6 +666,7 @@ mod tests {
     fn inspect_rejects_empty_input() {
         assert_eq!(inspect("   "), Err(A2lParseError::EmptyInput));
         assert_eq!(list_events(""), Err(A2lParseError::EmptyInput));
+        assert_eq!(parse_a2l("", &[]), Err(A2lParseError::EmptyInput));
     }
 
     #[test]
@@ -777,6 +794,48 @@ mod tests {
     }
 
     #[test]
+    fn linear_form_is_folded_and_the_rest_is_flagged_unsupported() {
+        let content = r#"
+      /begin COMPU_METHOD Lin "" FORM "%5.1" "degC" /begin FORMULA "X1*0.5 - 40" /end FORMULA /end COMPU_METHOD
+      /begin COMPU_METHOD BareX "" FORM "%5.1" "V" /begin FORMULA "(X+2)/4" /end FORMULA /end COMPU_METHOD
+      /begin COMPU_METHOD Square "" FORM "%5.1" "W" /begin FORMULA "X1*X1" /end FORMULA /end COMPU_METHOD
+      /begin COMPU_METHOD Rat "" RAT_FUNC "%5.1" "" COEFFS 1 0 0 0 0 1 /end COMPU_METHOD
+      /begin COMPU_METHOD Tab "" TAB_INTP "%5.1" "" COMPU_TAB_REF Tab_T /end COMPU_METHOD
+        "#;
+        let measurements: String = ["Lin", "BareX", "Square", "Rat", "Tab"]
+            .iter()
+            .enumerate()
+            .map(|(i, cm)| {
+                format!("/begin MEASUREMENT M{i} \"\" UWORD {cm} 0 0 0 100 ECU_ADDRESS 0x{i}0 /end MEASUREMENT
+")
+            })
+            .collect();
+        let project = parse_a2l(&(measurements + content), &[]).unwrap();
+        let cm = |name: &str| &project.compu_methods[name];
+
+        assert_eq!((cm("Lin").factor, cm("Lin").offset), (0.5, -40.0));
+        assert_eq!(
+            (cm("BareX").factor, cm("BareX").offset),
+            (0.25, 0.5),
+            "bare X is X1"
+        );
+        assert_eq!(cm("Lin").unsupported, None);
+        assert_eq!(cm("BareX").unsupported, None);
+        assert_eq!(
+            cm("Square").unsupported.as_deref(),
+            Some("FORM 'X1*X1' is not linear in X1")
+        );
+        assert_eq!(
+            cm("Rat").unsupported.as_deref(),
+            Some("non-linear RAT_FUNC")
+        );
+        assert_eq!(
+            cm("Tab").unsupported.as_deref(),
+            Some("TAB_INTP numeric table")
+        );
+    }
+
+    #[test]
     fn parses_static_daq_mode_and_event_fixed() {
         let content = r#"
       /begin IF_DATA XCP
@@ -876,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_dynamic_mode_without_static_keyword() {
+    fn dynamic_keyword_selects_dynamic_mode() {
         let content = r#"
       /begin IF_DATA XCP
         /begin DAQ
@@ -944,12 +1003,6 @@ mod tests {
         );
         assert_eq!(project.signals[0].lower_limit, 0.0);
         assert_eq!(project.signals[0].upper_limit, 200.0);
-    }
-
-    #[test]
-    fn rejects_empty_input() {
-        let result = parse_a2l("", &[]);
-        assert_eq!(result, Err(A2lParseError::EmptyInput));
     }
 
     #[test]

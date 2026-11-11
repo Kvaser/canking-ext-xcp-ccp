@@ -1,6 +1,25 @@
-Kvaser CanKing 7 DAQ Decoder extension
+Kvaser CanKing 7 DAQ Decoder extension 1.1.0
 ===============================================================================
 
-New Features and Fixed Problems in version 1.0.0
+Requires Kvaser CanKing 7.6 or later.
+
+New Features
 -------------------------------------------------------------------------------
-- Initial release.
+
+- The DAQ list prescaler set in the DAQ Configurator.
+- MAX_DLC_REQUIRED: XCP commands are padded to 8 bytes, or to MAX_DLC on CAN FD. CCP commands are always 8 bytes.
+- MIN_DAQ: dynamic DAQ lists are numbered from MIN_DAQ instead of 0.
+- ECU_ADDRESS_EXTENSION: each signal's address extension is sent in WRITE_DAQ.
+
+Bug Fixes
+-------------------------------------------------------------------------------
+
+- A signal sharing an ODT entry with part of a split signal was decoded from the wrong bytes.
+
+
+Kvaser CanKing 7 DAQ Decoder extension 1.0.0
+===============================================================================
+
+Requires Kvaser CanKing 7.6 or later.
+
+* Initial release.

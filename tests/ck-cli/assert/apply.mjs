@@ -5,6 +5,7 @@
 //
 // Compares parsed JSON
 import { readFileSync } from "node:fs";
+import { deepStrictEqual } from "node:assert";
 
 const [sentPath, gotPath, extName, nodeId] = process.argv.slice(2);
 const sent = JSON.parse(readFileSync(sentPath, "utf8"));
@@ -37,32 +38,10 @@ try {
   process.exit(1);
 }
 
-// Deep compare, reporting the first differing paths
-const diffs = [];
-(function walk(a, b, path) {
-  if (diffs.length >= 10) return;
-  if (a === b) return;
-  const ta = a === null ? "null" : Array.isArray(a) ? "array" : typeof a;
-  const tb = b === null ? "null" : Array.isArray(b) ? "array" : typeof b;
-  if (ta !== tb) return void diffs.push(`${path}: sent ${ta}, stored ${tb}`);
-  if (ta === "array") {
-    if (a.length !== b.length) return void diffs.push(`${path}: sent ${a.length} items, stored ${b.length}`);
-    a.forEach((v, i) => walk(v, b[i], `${path}[${i}]`));
-    return;
-  }
-  if (ta === "object") {
-    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
-      if (!(k in a)) diffs.push(`${path}.${k}: absent when sent, stored ${JSON.stringify(b[k])}`);
-      else if (!(k in b)) diffs.push(`${path}.${k}: sent ${JSON.stringify(a[k])}, absent when stored`);
-      else walk(a[k], b[k], `${path}.${k}`);
-    }
-    return;
-  }
-  diffs.push(`${path}: sent ${JSON.stringify(a)}, stored ${JSON.stringify(b)}`);
-})(sent, got, "config");
-
-for (const d of diffs) {
-  console.log(d);
+try {
+  deepStrictEqual(got, sent);
+} catch (e) {
+  console.log(`stored configuration differs from the one sent (+ stored, - sent):\n${e.message}`);
   failures++;
 }
 

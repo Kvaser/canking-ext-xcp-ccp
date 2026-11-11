@@ -23,9 +23,9 @@ mod state;
 
 use crate::calibration::consume_response;
 use crate::channels::validate_channel;
-use crate::config::{apply_config, Config, ConfigError};
+use crate::config::{Config, apply_config};
 use crate::decode::Decoder;
-use crate::definitions::{log_frame_definitions, PID_SIGNAL_NAME};
+use crate::definitions::{PID_SIGNAL_NAME, log_frame_definitions};
 use crate::logging::log_msg;
 use crate::state::STATE;
 use protocol_core::protocol::{self, ResponseType};
@@ -60,14 +60,14 @@ impl bindings::exports::canking::data_processor::extension_base::Guest for DaqCo
 
     fn on_config_change(new_config: String) {
         let result = serde_json::from_str::<Config>(&new_config)
-            .map_err(ConfigError::InvalidJson)
+            .map_err(|e| format!("Invalid DAQ Decoder config: {e}"))
             .and_then(|cfg| apply_config(&cfg));
 
         let applied = match result {
             Ok(applied) => applied,
             Err(e) => {
-                log(&e.to_string(), LogSeverity::Error);
-                set_error(&e.to_string());
+                log(&e, LogSeverity::Error);
+                set_error(&e);
                 return;
             }
         };
@@ -130,23 +130,23 @@ impl bindings::exports::canking::data_processor::extension_base::Guest for DaqCo
         let mut state = STATE.write().unwrap();
         state.reset_measurement();
 
-        if let Some(corrections) = state.decoder.as_ref().map(Decoder::corrections) {
-            if !corrections.is_empty() {
-                let listing = corrections
-                    .iter()
-                    .map(|(id, configured, in_force)| {
-                        format!("list {id}: 0x{configured:02X} -> 0x{in_force:02X}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                log_msg(
-                    format!("decoding with the PIDs learned from the ECU ({listing})"),
-                    LogSeverity::Information,
-                );
-            }
+        if let Some(corrections) = state.decoder.as_ref().map(Decoder::corrections)
+            && !corrections.is_empty()
+        {
+            let listing = corrections
+                .iter()
+                .map(|(id, configured, in_force)| {
+                    format!("list {id}: 0x{configured:02X} -> 0x{in_force:02X}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            log_msg(
+                format!("decoding with the PIDs learned from the ECU ({listing})"),
+                LogSeverity::Information,
+            );
         }
 
-        match state.commit_output_channel() {
+        match state.choose_and_store_channel() {
             Some(ch) => validate_channel(state.expect_fd, &ch),
             None => {
                 if state.start_daq {
@@ -160,7 +160,7 @@ impl bindings::exports::canking::data_processor::extension_base::Guest for DaqCo
         }
 
         // Queue the DAQ init/start sequence
-        if let Some((channel, frames)) = state.frames_to_queue_on_start() {
+        if let Some((channel, frames)) = state.frames_to_send(&state.init_frames) {
             log_msg(
                 format!("queueing {} DAQ init frames", frames.len()),
                 LogSeverity::Information,
@@ -202,7 +202,7 @@ impl bindings::exports::canking::data_processor::extension_base::Guest for DaqCo
                 LogSeverity::Warning,
             );
         }
-        if let Some((channel, frames)) = state.frames_to_send_on_stop() {
+        if let Some((channel, frames)) = state.frames_to_send(&state.stop_frames) {
             log_msg(
                 format!("sending {} DAQ stop frames", frames.len()),
                 LogSeverity::Information,
@@ -331,16 +331,7 @@ impl bindings::Guest for DaqComponent {
             }
 
             // `decoded` only comes back non-empty for a payload `Decoder::decode` found a PID byte in.
-            let Some(&pid_byte) = data.first() else {
-                log_msg(
-                    format!(
-                        "on_frames: decoded {} signal(s) from an empty payload (frame {handle})",
-                        decoded.len()
-                    ),
-                    LogSeverity::Warning,
-                );
-                continue;
-            };
+            let pid_byte = data[0];
 
             decoded_signals += decoded.len();
 

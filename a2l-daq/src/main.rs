@@ -1,9 +1,10 @@
+//! `a2l-daq-cli`: interactive A2L to DBC and t-script. Takes the A2L path as its only argument and asks for the rest.
+
 use a2l_daq::{
-    build_daq_init, build_trigger, bus_defaults, dbc::sanitize_name, event_channels,
-    expand_signal_indices, generate_tscript, list_protocols, list_signal_names,
-    parse_a2l_with_rejects, pipeline, resolve_signal_hooks, A2lProject, CanChannel, DaqList,
-    MessageRef, Protocol, ResolvedTrigger, SignalHook, TScriptConfig, TriggerAction,
-    TriggerCondition, DEFAULT_INIT_TIMEOUT_MS,
+    A2lProject, CanChannel, DaqList, MessageRef, Protocol, ResolvedTrigger, TScriptConfig,
+    TriggerAction, build_daq_init, build_trigger, bus_defaults, dbc::sanitize_name,
+    dbc_signal_hooks, event_channels, expand_signal_indices, generate_tscript, list_protocols,
+    list_signal_names, parse_a2l_with_rejects, pipeline, resolve_signal_hooks,
 };
 use std::env;
 use std::fs;
@@ -79,6 +80,10 @@ fn main() {
 
     println!("\nProtocol: {}", protocol.name());
 
+    for unread in a2l_daq::unread_keywords(&a2l_content) {
+        eprintln!("Warning: {unread}");
+    }
+
     // Selected signals that did not survive parsing, or cannot be measured.
     for warning in a2l_daq::dropped_signals(&project, &selected_signals, &rejected) {
         eprintln!("Warning: {}", warning);
@@ -137,10 +142,12 @@ fn main() {
         }
         println!("t-script written to: {}", t_path);
         // A standalone script carries its own decoding, so scc needs no database.
-        let dbase = match config.signals.first().map(|h| &h.message) {
-            Some(MessageRef::Id { .. }) => None,
-            Some(MessageRef::Dbc(_)) | None => Some(dbc_path.as_str()),
-        };
+        let reads_dbc = config.signals.is_empty()
+            || config
+                .signals
+                .iter()
+                .any(|h| matches!(h.message, MessageRef::Dbc(_)));
+        let dbase = reads_dbc.then_some(dbc_path.as_str());
         compile_tscript(&t_path, dbase);
     }
 }
@@ -155,27 +162,9 @@ fn prompt_selection(all_names: &[String]) -> Vec<String> {
             return all_names.to_vec();
         }
 
-        let parts: Vec<&str> = line
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        let mut selected = Vec::new();
-        let mut invalid = Vec::new();
-
-        for part in parts {
-            if let Ok(idx) = part.parse::<usize>() {
-                match all_names.get(idx.wrapping_sub(1)) {
-                    Some(name) => selected.push(name.clone()),
-                    None => invalid.push(part.to_string()),
-                }
-            } else if all_names.iter().any(|n| n == part) {
-                selected.push(part.to_string());
-            } else {
-                invalid.push(part.to_string());
-            }
-        }
+        let names: Vec<&str> = all_names.iter().map(String::as_str).collect();
+        let (picked, invalid) = pick(&line, &names);
+        let mut selected: Vec<String> = picked.into_iter().map(|i| all_names[i].clone()).collect();
 
         if !invalid.is_empty() {
             println!("Unknown entries (ignored): {}", invalid.join(", "));
@@ -187,6 +176,26 @@ fn prompt_selection(all_names: &[String]) -> Vec<String> {
         }
         println!("No valid signals matched, please try again.");
     }
+}
+
+/// The indices into `names` of each comma/space separated 1-based number or name in `line`, and the parts that match nothing.
+fn pick(line: &str, names: &[&str]) -> (Vec<usize>, Vec<String>) {
+    let mut picked = Vec::new();
+    let mut invalid = Vec::new();
+    for part in line
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+    {
+        let index = match part.parse::<usize>() {
+            Ok(n) => n.checked_sub(1).filter(|&i| i < names.len()),
+            Err(_) => names.iter().position(|n| *n == part),
+        };
+        match index {
+            Some(i) => picked.push(i),
+            None => invalid.push(part.to_string()),
+        }
+    }
+    (picked, invalid)
 }
 
 fn assign_signals_to_events(
@@ -233,27 +242,12 @@ fn assign_signals_to_events(
             continue;
         }
 
-        let parts: Vec<&str> = line
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
+        let names: Vec<&str> = remaining_signals.iter().map(|s| s.name.as_str()).collect();
+        let (mut indices_to_remove, _) = pick(&line, &names);
+        let assigned_signals: Vec<String> = indices_to_remove
+            .iter()
+            .map(|&i| remaining_signals[i].name.clone())
             .collect();
-
-        let mut assigned_signals = Vec::new();
-        let mut indices_to_remove = Vec::new();
-
-        for part in parts {
-            if let Ok(idx) = part.parse::<usize>() {
-                let idx = idx.wrapping_sub(1);
-                if let Some(signal) = remaining_signals.get(idx) {
-                    assigned_signals.push(signal.name.clone());
-                    indices_to_remove.push(idx);
-                }
-            } else if let Some(pos) = remaining_signals.iter().position(|s| s.name == part) {
-                assigned_signals.push(remaining_signals[pos].name.clone());
-                indices_to_remove.push(pos);
-            }
-        }
 
         // Remove assigned signals
         indices_to_remove.sort_unstable();
@@ -300,6 +294,15 @@ fn prompt_tscript_config(
     } else {
         None
     };
+    // 0 is no limit / no watchdog
+    let max_captures = timer_ms
+        .map(|_| prompt_parse("  Captures before DAQ stops (0 = no limit) [1]: ", 1u32))
+        .filter(|&n| n > 0);
+    let daq_watchdog_ms = Some(prompt_parse(
+        "Restart the DAQ init after this many ms without a DAQ frame (0 = never) [10000]: ",
+        10_000u32,
+    ))
+    .filter(|&ms| ms > 0);
 
     // Collect all (sanitized_name, original_name, pid) for display.
     let mut signal_pids: Vec<(String, String, u16)> = Vec::new();
@@ -354,7 +357,38 @@ fn prompt_tscript_config(
         }
     };
 
+    let stop_expr = prompt_line(
+        "Stop expression: stops logging and DAQ for good when true (same syntax, empty to skip): ",
+    );
+    let stop_can_id = loop {
+        let line = prompt_line(
+            "Stop frame CAN id: stops for good when it arrives (0x... or decimal, empty for none): ",
+        );
+        if line.is_empty() {
+            break None;
+        }
+        let parsed = match line.strip_prefix("0x").or_else(|| line.strip_prefix("0X")) {
+            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+            None => line.parse().ok(),
+        };
+        match parsed.filter(|&id| id <= 0x1FFF_FFFF) {
+            Some(id) => match a2l_daq::stop_can_id_conflict(id, project, daq_lists, protocol) {
+                Some(why) => eprintln!("{why}; pick another id."),
+                None => break Some(id),
+            },
+            None => eprintln!("Not a CAN id: {line}"),
+        }
+    };
+
     let default_can_id = a2l_daq::layout::daq_can_id(project, protocol).unwrap_or(0);
+    let stop_resolved: Option<ResolvedTrigger> = if stop_expr.is_empty() {
+        None
+    } else {
+        let expr = expand_signal_indices(&stop_expr, &signal_names);
+        build_trigger(&expr, standalone, project, daq_lists, default_can_id)
+            .map_err(|e| eprintln!("\nStop condition dropped: {e}"))
+            .ok()
+    };
 
     let trigger_resolved: Option<(ResolvedTrigger, TriggerAction)> = match asked {
         None => None,
@@ -389,7 +423,7 @@ fn prompt_tscript_config(
             ),
             true,
         ) {
-        let init = build_daq_init(protocol, project, daq_lists, DEFAULT_INIT_TIMEOUT_MS);
+        let init = build_daq_init(protocol, project, daq_lists);
         if init.is_none() {
             eprintln!(
                 "Skipping {} init: A2L is missing the master/slave CAN identifiers.",
@@ -402,35 +436,38 @@ fn prompt_tscript_config(
     };
 
     let combo = trigger_resolved.as_ref().map(|(r, a)| (r, *a));
-    let signals = resolve_signal_hooks(standalone, project, daq_lists, protocol, combo)
-        .unwrap_or_else(|e| {
-            eprintln!("Cannot build a standalone script: {e}. Falling back to DBC mode.");
-            let trigger = trigger_resolved.as_ref().map(|(r, a)| TriggerCondition {
-                signals: r.signals.clone(),
-                comparisons: r.comparisons.clone(),
-                action: *a,
-            });
-            vec![SignalHook {
-                message: MessageRef::Dbc(String::from("DAQ")),
-                trigger,
-                handles_responses: true,
-            }]
-        });
-    let decoders = trigger_resolved
-        .map(|(r, _)| r.decoders)
-        .unwrap_or_default();
+    let signals = resolve_signal_hooks(
+        standalone,
+        project,
+        daq_lists,
+        protocol,
+        combo,
+        stop_resolved.as_ref(),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Cannot build a standalone script: {e}. Falling back to DBC mode.");
+        dbc_signal_hooks(project, daq_lists, protocol, combo, stop_resolved.as_ref())
+    });
+    let decoders = a2l_daq::merge_decoders(
+        trigger_resolved
+            .map(|(r, _)| r.decoders)
+            .unwrap_or_default(),
+        stop_resolved.map(|r| r.decoders).unwrap_or_default(),
+    );
 
     TScriptConfig {
-        channels: vec![CanChannel {
+        max_captures,
+        daq_watchdog_ms,
+        stop_can_id,
+        channel: CanChannel {
             index: channel_index,
             bitrate,
             data_bitrate,
-        }],
+        },
         pretrigger_ms,
         signals,
         timer_ms,
         daq_init,
-        can_fd: data_bitrate.is_some(),
         traceability: a2l_daq::traceability_lines(source_name, project, daq_lists, protocol),
         decoders,
     }
@@ -541,5 +578,18 @@ fn a2l_stem_short(a2l_stem: &str) -> String {
         stem
     } else {
         format!("{}/{}", dir, stem)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick;
+
+    #[test]
+    fn pick_takes_numbers_and_names_and_reports_the_rest() {
+        let names = ["Rpm", "Speed", "Temp"];
+        let (picked, invalid) = pick("3, Speed  9 0 Gear", &names);
+        assert_eq!(picked, [2, 1]);
+        assert_eq!(invalid, ["9", "0", "Gear"]);
     }
 }

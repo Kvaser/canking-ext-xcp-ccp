@@ -51,6 +51,7 @@ impl Config {
                 text_table: vec![],
                 default_text: Some("".to_string()),
                 formula: None,
+                unsupported: None,
             },
         );
 
@@ -64,6 +65,7 @@ impl Config {
                 lower_limit: 0.0,
                 upper_limit: 8000.0,
                 ecu_address: 0x1000,
+                address_extension: 0,
                 size: 2,
                 bit_mask: None,
                 byte_order: Some(ByteOrder::MsbLast),
@@ -80,6 +82,9 @@ impl Config {
                     max_odt_entry_size: 7,
                     timestamp_size: 0,
                     timestamp_fixed: false,
+                    min_daq: 0,
+                    odt_entry_granularity: 1,
+                    prescaler_supported: true,
                 },
                 event_info: EventInfo {
                     events: vec![EventEntry {
@@ -98,7 +103,9 @@ impl Config {
                     can_fd: Some(CanFdInfo {
                         max_dlc: 64,
                         data_baudrate: Some(2_000_000),
+                        max_dlc_required: false,
                     }),
+                    max_dlc_required: false,
                 }),
                 protocol_layer: Some(ProtocolLayerInfo {
                     byte_order: Some(ByteOrder::MsbLast),
@@ -134,6 +141,7 @@ impl Config {
         };
 
         let daq_lists = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             odts: vec![Odt {

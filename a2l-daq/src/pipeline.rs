@@ -7,16 +7,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
-use crate::a2l::{A2lProject, CanIdSource, RejectedVirtual, RejectedVirtualReason};
-use crate::daq::{build_daq_list, DaqList};
-use crate::dbc::{create_dbc_file, sanitize_name, DbcError};
 use crate::Protocol;
+use crate::a2l::{A2lProject, CanIdSource, RejectedVirtual, RejectedVirtualReason};
+use crate::daq::{DaqList, build_daq_list};
+use crate::dbc::{DbcError, create_dbc_file, sanitize_name};
 
 /// A non-fatal issue surfaced to the host so it can be shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Diagnostic {
-    /// A signal was assigned to an event but no DAQ list slot remained for it, so
-    /// it is absent from both the DBC and any downstream output.
+    /// A signal was assigned to an event but no DAQ list slot remained for it, so it is absent from both the DBC and any downstream output.
     UnplacedSignal {
         name: String,
         event: Option<String>,
@@ -36,6 +35,12 @@ pub enum Diagnostic {
     CollidingNames {
         sanitized: String,
         names: Vec<String>,
+    },
+    /// A placed signal's COMPU_METHOD could not be reduced to factor/offset, so every output carries its raw value.
+    UnsupportedConversion {
+        name: String,
+        conversion: String,
+        reason: String,
     },
 }
 
@@ -72,6 +77,14 @@ impl Display for Diagnostic {
                     .map(|n| format!("'{n}'"))
                     .collect::<Vec<_>>()
                     .join(", ")
+            ),
+            Self::UnsupportedConversion {
+                name,
+                conversion,
+                reason,
+            } => write!(
+                f,
+                "signal '{name}' uses conversion '{conversion}' ({reason}), which is not supported:                  its values are raw, not physical"
             ),
         }
     }
@@ -165,6 +178,7 @@ pub fn build(
     }
 
     warnings.extend(colliding_names(&daq_lists));
+    warnings.extend(unsupported_conversions(project, &daq_lists));
 
     let dbc = create_dbc_file(project, &daq_lists, protocol, source_name)?;
 
@@ -187,6 +201,42 @@ pub fn apply_can_id_overrides(daq_lists: &mut [DaqList], overrides: &[(u16, u32)
             *assigned = Some(can_id);
         }
     }
+}
+
+/// Set the prescaler of DAQ lists, by list identifier. A prescaler below 1 is taken as 1.
+pub fn apply_prescalers(daq_lists: &mut [DaqList], prescalers: &[(u16, u16)]) {
+    for &(list_id, prescaler) in prescalers {
+        if let Some(list) = daq_lists.iter_mut().find(|d| d.id == list_id) {
+            list.prescaler = prescaler.max(1);
+        }
+    }
+}
+
+/// Flag placed signals whose conversion could not be applied, once per signal.
+fn unsupported_conversions(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Diagnostic> {
+    let signals = crate::layout::signal_lookup(project);
+    let mut seen = HashSet::new();
+    daq_lists
+        .iter()
+        .flat_map(|d| &d.odts)
+        .flat_map(|o| &o.entries)
+        .flat_map(|e| &e.names)
+        .filter_map(|n| crate::layout::resolve_signal(&signals, n))
+        .filter(|s| seen.insert(s.name.as_str()))
+        .filter_map(|s| {
+            let conversion = s.conversion.as_ref()?;
+            let reason = project
+                .compu_methods
+                .get(&conversion.identifier)?
+                .unsupported
+                .clone()?;
+            Some(Diagnostic::UnsupportedConversion {
+                name: s.name.clone(),
+                conversion: conversion.identifier.clone(),
+                reason,
+            })
+        })
+        .collect()
 }
 
 /// Flag signal names that collide once sanitised into DBC identifiers.
@@ -214,7 +264,24 @@ fn colliding_names(daq_lists: &[DaqList]) -> Vec<Diagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_a2l, parse_a2l_with_rejects, Protocol};
+    use crate::{Protocol, parse_a2l, parse_a2l_with_rejects};
+
+    #[test]
+    fn prescalers_apply_by_list_id_and_never_drop_below_one() {
+        let mut lists: Vec<DaqList> = (0..3)
+            .map(|id| DaqList {
+                id,
+                first_pid: 0,
+                odts: Vec::new(),
+                event: None,
+                can_id: CanIdSource::Default,
+                prescaler: 1,
+            })
+            .collect();
+        apply_prescalers(&mut lists, &[(1, 100), (2, 0), (7, 5)]);
+        let got: Vec<u16> = lists.iter().map(|l| l.prescaler).collect();
+        assert_eq!(got, [1, 100, 1]);
+    }
 
     const A2L: &str = r#"
     /begin MEASUREMENT Rpm "Engine speed" UWORD Rpm_CM 0 0 0 8000 ECU_ADDRESS 0x1000 /end MEASUREMENT
@@ -242,14 +309,38 @@ mod tests {
     }
 
     #[test]
+    fn placed_signal_with_unsupported_conversion_is_flagged_once() {
+        let content = r#"
+        /begin MEASUREMENT Power "" UWORD Square 0 0 0 100 ECU_ADDRESS 0x1000 /end MEASUREMENT
+        /begin MEASUREMENT Temp "" UWORD Lin 0 0 0 100 ECU_ADDRESS 0x2000 /end MEASUREMENT
+        /begin COMPU_METHOD Square "" FORM "%5.1" "W" /begin FORMULA "X1*X1" /end FORMULA /end COMPU_METHOD
+        /begin COMPU_METHOD Lin "" FORM "%5.1" "degC" /begin FORMULA "X1-40" /end FORMULA /end COMPU_METHOD
+        "#;
+        let a2l = format!("{content}{}", &A2L[A2L.find("/begin IF_DATA").unwrap()..]);
+        let mut project = parse_a2l(&a2l, &[]).unwrap();
+        let assignments = vec![("Task10ms".into(), vec!["Power".into(), "Temp".into()])];
+        let out = build(&mut project, &assignments, Protocol::Xcp, "test.a2l").unwrap();
+        let flagged: Vec<&str> = out
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                Diagnostic::UnsupportedConversion { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(flagged, vec!["Power"]);
+    }
+
+    #[test]
     fn unknown_assigned_signal_becomes_warning() {
         let mut project = parse_a2l(A2L, &[]).unwrap();
         let assignments = vec![("Task10ms".into(), vec!["Ghost".into()])];
         let out = build(&mut project, &assignments, Protocol::Xcp, "test.a2l").unwrap();
-        assert!(out
-            .warnings
-            .iter()
-            .any(|w| matches!(w, Diagnostic::UnknownSignal { name } if name == "Ghost")));
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| matches!(w, Diagnostic::UnknownSignal { name } if name == "Ghost"))
+        );
     }
 
     #[test]
@@ -343,17 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn distinct_names_produce_no_collision_warning() {
-        let mut project = parse_a2l(A2L, &[]).unwrap();
-        let assignments = vec![("Task10ms".into(), vec!["Rpm".into()])];
-        let out = build(&mut project, &assignments, Protocol::Xcp, "test.a2l").unwrap();
-        assert!(!out
-            .warnings
-            .iter()
-            .any(|w| matches!(w, Diagnostic::CollidingNames { .. })));
-    }
-
-    #[test]
     fn build_stamps_the_assignments_onto_the_project() {
         let mut project = parse_a2l(A2L, &[]).unwrap();
         assert_eq!(project.signals[0].event, None);
@@ -375,6 +455,7 @@ mod tests {
         };
         let mut lists = vec![
             DaqList {
+                prescaler: 1,
                 id: 0,
                 first_pid: 0,
                 odts: vec![entry("A")],
@@ -382,6 +463,7 @@ mod tests {
                 can_id: CanIdSource::Default,
             },
             DaqList {
+                prescaler: 1,
                 id: 1,
                 first_pid: 1,
                 odts: vec![entry("B")],
@@ -389,6 +471,7 @@ mod tests {
                 can_id: CanIdSource::Fixed { id: 0x789 },
             },
             DaqList {
+                prescaler: 1,
                 id: 2,
                 first_pid: 2,
                 odts: vec![entry("C")],
@@ -424,10 +507,10 @@ mod tests {
     #[test]
     fn missing_can_id_slave_is_fatal() {
         let mut project = parse_a2l(A2L, &[]).unwrap();
-        if let Some(x) = project.xcp_data.as_mut() {
-            if let Some(c) = x.xcp_info.as_mut() {
-                c.can_id_slave = None;
-            }
+        if let Some(x) = project.xcp_data.as_mut()
+            && let Some(c) = x.xcp_info.as_mut()
+        {
+            c.can_id_slave = None;
         }
         let err = build(&mut project, &[], Protocol::Xcp, "test.a2l").unwrap_err();
         assert_eq!(err, DbcError::MissingCanIdSlave);

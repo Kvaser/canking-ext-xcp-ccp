@@ -5,9 +5,9 @@
 //!
 //! [`traceability_lines`] renders those missing facts as plain text lines that the generated artefacts can embed as comments.
 
+use crate::Protocol;
 use crate::a2l::{A2lProject, CanIdSource};
 use crate::daq::DaqList;
-use crate::Protocol;
 use std::fmt::Write;
 
 /// Text helping with traceability, describing the source A2L, protocol, bus parameters, CAN identifiers, and the DAQ/event signal layout.
@@ -159,6 +159,7 @@ mod tests {
             ..Default::default()
         };
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: Some("Task10ms".into()),
@@ -193,6 +194,7 @@ mod tests {
             ..Default::default()
         };
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,

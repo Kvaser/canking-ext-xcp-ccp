@@ -1,4 +1,4 @@
-package kvaser:a2l-daq@1.0.0;
+package kvaser:a2l-daq@1.1.0;
 
 interface generator {
   // ---- Protocol ----
@@ -62,6 +62,14 @@ interface generator {
     names: list<string>,
   }
 
+  record unsupported-conversion {
+    name: string,
+    /// The COMPU_METHOD identifier.
+    conversion: string,
+    /// Which part of the conversion is unsupported, e.g. `non-linear RAT_FUNC`.
+    reason: string,
+  }
+
   /// A non-fatal issue. The caller decides how to surface it.
   variant diagnostic {
     /// A signal was assigned to an event but no DAQ list slot remained.
@@ -74,6 +82,8 @@ interface generator {
     unmeasurable-signal(unmeasurable-signal),
     /// Two or more signals sanitise to one DBC identifier, so the generated DBC and t-script cannot tell them apart.
     colliding-names(colliding-names),
+    /// A placed signal's conversion cannot be applied, so it is logged and decoded as its raw value.
+    unsupported-conversion(unsupported-conversion),
   }
 
   // ---- Inputs / outputs ----
@@ -131,6 +141,18 @@ interface generator {
     bitrate: option<u32>,
     /// CAN FD data-phase bit rate in bit/s, if declared.
     data-bitrate: option<u32>,
+    /// True when DAQ lists accept a prescaler: always for CCP, for XCP when the A2L declares `PRESCALER_SUPPORTED`.
+    prescaler: bool,
+  }
+
+  /// A keyword in the A2L that changes the outputs but isn't read
+  record unread-keyword {
+    /// As it appears in the A2L, e.g. `/include`.
+    keyword: string,
+    /// How many times it occurs.
+    count: u32,
+    /// What goes wrong because it isn't read.
+    effect: string,
   }
 
   /// Everything the selection UI needs from an A2L
@@ -140,6 +162,7 @@ interface generator {
     protocols: list<protocol>,
     transports: list<transport-info>,
     groups: list<group-info>,
+    unread: list<unread-keyword>,
   }
 
   /// Output
@@ -179,6 +202,7 @@ interface generator {
     assignments: list<event-assignment>,
     start-daq: bool,
     daq-can-id-overrides: list<tuple<u16, u32>>,
+    daq-prescalers: list<tuple<u16, u16>>,
     protocol: protocol,
   ) -> result<config-output, string>;
 
@@ -221,8 +245,17 @@ interface generator {
     pretrigger-ms: u32,
     /// Stop logging this many ms after the trigger fires (none = no timer).
     timer-ms: option<u32>,
+    /// With `timer-ms`: stop DAQ after this many captures (none = no limit). A capture starts each time
+    /// the trigger condition turns from false to true.
+    max-captures: option<u32>,
+    /// Start the DAQ init over when no DAQ frame arrives for this many ms (none = never).
+    daq-watchdog-ms: option<u32>,
     /// Start-logger trigger conditions; empty = no signal trigger.
     conditions: list<trigger-condition>,
+    /// Stop logging and DAQ for good when these all hold; empty = no stop condition.
+    stop-conditions: list<trigger-condition>,
+    /// Stop logging and DAQ for good when a frame with this CAN id arrives (none = no stop frame).
+    stop-can-id: option<u32>,
     /// Manual bus-parameter override; none = derive bus params from the A2L.
     bus: option<bus-override>,
     /// Whether the script reads signals through the DBC or decodes them itself.
@@ -246,6 +279,7 @@ interface generator {
     assignments: list<event-assignment>,
     options: tscript-options,
     daq-can-id-overrides: list<tuple<u16, u32>>,
+    daq-prescalers: list<tuple<u16, u16>>,
     protocol: protocol,
   ) -> result<tscript-output, string>;
 }

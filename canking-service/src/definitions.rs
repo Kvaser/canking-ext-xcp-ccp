@@ -56,7 +56,10 @@ fn frame_length(len: u32, can_fd: bool) -> u32 {
     if !can_fd || len <= 8 {
         return len;
     }
-    [12, 16, 20, 24, 32, 48, 64].into_iter().find(|&n| n >= len).unwrap_or(64)
+    [12, 16, 20, 24, 32, 48, 64]
+        .into_iter()
+        .find(|&n| n >= len)
+        .unwrap_or(64)
 }
 
 /// The multiplexor signal every DAQ frame carries as its first byte.
@@ -207,6 +210,7 @@ mod tests {
             ..Default::default()
         });
         cfg.daq_lists.push(DaqList {
+            prescaler: 1,
             id: 1,
             first_pid: 0,
             odts: vec![Odt {

@@ -15,7 +15,8 @@
 // Exits 0 when every layer holds, 1 otherwise.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { close } from "../util/frame-values.mjs";
+import { close, loadConfig, byteOrder, checkFullMask, scaling } from "../util/frame-values.mjs";
+import { fail } from "../util/cli.mjs";
 
 const { positionals, values } = parseArgs({
   args: process.argv.slice(2),
@@ -27,37 +28,20 @@ const minFramesOverride = values["min-daq-frames"] === undefined ? undefined : N
 
 const [cfgPath, framesPath, casePath] = positionals;
 if (!cfgPath || !framesPath || !casePath) {
-  console.error("usage: decode-log.mjs <config.json> <frames.json> <case.json> [--no-pin] [--min-daq-frames N]");
-  process.exit(1);
+  fail("usage: decode-log.mjs <config.json> <frames.json> <case.json> [--no-pin] [--min-daq-frames N]");
 }
 
-// A config-shape problem, not a decode mismatch. Report and bail immediately
-const fail = (m) => {
-  console.log(m);
-  process.exit(1);
-};
-
-const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+const { cfg, dtoId, sigByName, cmByName, defaultOrder, tsSize } = loadConfig(cfgPath);
 const frames = JSON.parse(readFileSync(framesPath, "utf8"));
 const recorded = JSON.parse(readFileSync(casePath, "utf8")).recorded ?? {};
-
-const proj = cfg.project;
-const sigByName = new Map(proj.signals.map((s) => [s.name, s]));
-const cmByName = new Map((proj.compu_methods ?? []).map((c) => [c.name, c]));
-const defaultOrder = proj.default_byte_order ?? "MsbLast";
-const isXcp = String(cfg.protocol).toLowerCase() === "xcp";
-const dtoId = isXcp ? proj.xcp_data?.xcp_info?.can_id_slave : proj.ccp_data?.info?.dto_id;
-if (dtoId === undefined || dtoId === null) fail("config has no DTO CAN id");
-
-// Timestamps are an XCP DAQ property and ride in the first ODT of a list only.
-const tsSize = isXcp ? (proj.xcp_data?.daq_info?.timestamp_size ?? 0) : 0;
 
 // ---- the layout this file expects, derived from the config -------------------
 //
 // PID -> the signals that frame carries, in payload order:
 //   byte 0     PID = daq_list.first_pid + odt_index
 //   bytes 1..N timestamp, N = daq_info.timestamp_size   (first ODT only)
-//   remaining  ODT entries in order, each `size` bytes
+//   remaining ODT entries in order, each `size` bytes; a signal sits at its address offset inside its entry
+//             (an entry may start before it, padded to the ECU's granularity, or hold signals that overlap)
 
 const layoutByPid = new Map();
 
@@ -75,38 +59,28 @@ for (const dl of cfg.daq_lists) {
     }
 
     for (const entry of odt.entries) {
+      const entryStart = cursor;
       for (const name of entry.names) {
         const sig = sigByName.get(name);
         if (!sig) fail(`DAQ list references signal '${name}' absent from project.signals`);
-        if ((sig.virtual_inputs ?? []).length) {
-          fail(`signal '${name}' is a virtual measurement; it has no place in a DTO`);
-        }
-        if (sig.bit_mask !== null && sig.bit_mask !== undefined) {
-          const full = (1n << BigInt(8 * sig.size)) - 1n;
-          if (BigInt(sig.bit_mask) !== full) {
-            fail(
-              `signal '${name}' has a partial bit_mask 0x${BigInt(sig.bit_mask).toString(16)} ` +
-                `over ${sig.size} byte(s); neither the decoder nor this assert models one`,
-            );
-          }
-        }
-        const cm = sig.conversion ? cmByName.get(sig.conversion.identifier) : undefined;
-        if (cm?.formula) fail(`signal '${name}' uses a COMPU_METHOD formula; only factor/offset here`);
-        const order = sig.byte_order ?? defaultOrder;
-        if (order !== "MsbLast" && order !== "MsbFirst") fail(`unknown byte_order '${order}'`);
+        const at = sig.ecu_address - entry.ecu_address;
+        if (at >= 0 && at + sig.size <= entry.size) cursor = entryStart + at;
+        checkFullMask(sig);
+        const { factor, offset } = scaling(sig, cmByName);
 
         slots.push({
           name,
           start: cursor,
           size: sig.size,
-          bigEndian: order === "MsbFirst",
+          bigEndian: byteOrder(sig, defaultOrder) === "MsbFirst",
           isSigned: !!sig.is_signed,
           isFloat: !!sig.is_float,
-          factor: cm?.factor ?? 1,
-          offset: cm?.offset ?? 0,
+          factor,
+          offset,
         });
         cursor += sig.size;
       }
+      cursor = entryStart + entry.size;
     }
     layoutByPid.set(pid, slots);
   });

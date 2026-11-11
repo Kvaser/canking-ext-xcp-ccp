@@ -1,29 +1,20 @@
 //! Parsing the module-level `/begin IF_DATA ASAP1B_CCP ... /end IF_DATA` block: transport
 //! parameters (`TP_BLOB`), event rasters, and DAQ list sources (`SOURCE`/`QP_BLOB`).
 
-use super::tokenizer::{extract_block, parse_u16_token, parse_u32_token};
-use super::{CcpData, CcpInfo, CcpSource, EventEntry};
+use super::tokenizer::{
+    blocks, child_blocks, extract_block, parse_can_id_token, parse_u16_token, parse_u32_token,
+};
+use super::xcp::parse_event_entry;
+use super::{CcpData, CcpInfo, CcpSource};
 
 /// Finds the module-level `IF_DATA ASAP1B_CCP` block and parses its contents.
 ///
 /// Returns a `CcpData`, or `None` if the file declares no CCP transport.
 pub(super) fn parse_if_data_ccp(tokens: &[String]) -> Option<CcpData> {
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "/begin"
-            && tokens.get(i + 1).map(String::as_str) == Some("IF_DATA")
-            && tokens.get(i + 2).map(String::as_str) == Some("ASAP1B_CCP")
-        {
-            i += 3; // consume /begin IF_DATA ASAP1B_CCP
-            let block = extract_block(tokens, &mut i);
-            if block_has_begin(block, "TP_BLOB") {
-                return Some(parse_ccp_contents(block));
-            }
-        } else {
-            i += 1;
-        }
-    }
-    None
+    blocks(tokens, "IF_DATA")
+        .filter_map(|b| b.split_first())
+        .find(|(tag, block)| *tag == "ASAP1B_CCP" && block_has_begin(block, "TP_BLOB"))
+        .map(|(_, block)| parse_ccp_contents(block))
 }
 
 /// Whether `tokens` contains a `/begin KEYWORD` at its top scan (any depth).
@@ -41,34 +32,27 @@ fn parse_ccp_contents(tokens: &[String]) -> CcpData {
     let mut sources = Vec::new();
     let mut info = CcpInfo::default();
 
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "/begin" {
-            let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
-            i += 2;
-            let block = extract_block(tokens, &mut i);
-            match keyword {
-                "RASTER" => {
-                    if let Some(r) = parse_ccp_raster(block) {
-                        rasters.push(r);
-                    }
+    for (keyword, block) in child_blocks(tokens) {
+        match keyword {
+            // `"name" "short name" channel time_unit time_cycle`
+            "RASTER" => {
+                if let Some(r) = parse_event_entry(block, 4, 3) {
+                    rasters.push(r);
                 }
-                "SOURCE" => {
-                    if let Some(s) = parse_ccp_source(block) {
-                        sources.push(s);
-                    }
-                }
-                "TP_BLOB" => {
-                    // Preserve a SEED_KEY parsed before TP_BLOB was reached; block order isn't guaranteed.
-                    let seed_key_dll = info.seed_key_dll.take();
-                    info = parse_tp_blob(block);
-                    info.seed_key_dll = seed_key_dll;
-                }
-                "SEED_KEY" => info.seed_key_dll = parse_seed_key(block),
-                _ => {} // EVENT_GROUP, CHECKSUM
             }
-        } else {
-            i += 1;
+            "SOURCE" => {
+                if let Some(s) = parse_ccp_source(block) {
+                    sources.push(s);
+                }
+            }
+            "TP_BLOB" => {
+                // Preserve a SEED_KEY parsed before TP_BLOB was reached since block order isn't guaranteed.
+                let seed_key_dll = info.seed_key_dll.take();
+                info = parse_tp_blob(block);
+                info.seed_key_dll = seed_key_dll;
+            }
+            "SEED_KEY" => info.seed_key_dll = parse_seed_key(block),
+            _ => {} // EVENT_GROUP, CHECKSUM
         }
     }
 
@@ -79,32 +63,19 @@ fn parse_ccp_contents(tokens: &[String]) -> CcpData {
     }
 }
 
-/// Parses a `/begin SEED_KEY "<dll name>" /end SEED_KEY` block.
+/// Parses `/begin SEED_KEY "<CAL dll>" "<DAQ dll>" "<PGM dll>" /end SEED_KEY`, keeping the DAQ privilege's DLL
 fn parse_seed_key(tokens: &[String]) -> Option<String> {
-    tokens
-        .first()
+    let names: Vec<&str> = tokens
+        .iter()
         .filter(|t| t.starts_with('"'))
-        .map(|t| t.trim_matches('"').to_string())
-}
-
-/// Parses a `/begin RASTER` block into an [`EventEntry`].
-///
-/// Return an `EventEntry` with the channel number, name, and optional time cycle/unit.
-fn parse_ccp_raster(tokens: &[String]) -> Option<EventEntry> {
-    let name = tokens
-        .first()
-        .filter(|t| t.starts_with('"'))
-        .map(|t| t.trim_matches('"').to_string())?;
-    let channel = parse_u32_token(tokens.get(2)?)?;
-    let time_unit = tokens.get(3).and_then(|t| parse_u32_token(t)).unwrap_or(0);
-    let time_cycle = tokens.get(4).and_then(|t| parse_u32_token(t)).unwrap_or(0);
-
-    Some(EventEntry {
-        channel,
-        name,
-        time_cycle,
-        time_unit,
-    })
+        .map(|t| t.trim_matches('"'))
+        .collect();
+    let daq = if names.len() > 1 {
+        names[1]
+    } else {
+        *names.first()?
+    };
+    (!daq.is_empty()).then(|| daq.to_string())
 }
 
 /// Parses a `/begin SOURCE` block
@@ -115,21 +86,8 @@ fn parse_ccp_source(tokens: &[String]) -> Option<CcpSource> {
         .first()
         .filter(|t| t.starts_with('"'))
         .map(|t| t.trim_matches('"').to_string())?;
-
-    let mut i = 0;
-    while i < tokens.len() {
-        if tokens[i] == "/begin" {
-            let keyword = tokens.get(i + 1).map(String::as_str).unwrap_or("");
-            i += 2;
-            let block = extract_block(tokens, &mut i);
-            if keyword == "QP_BLOB" {
-                return parse_qp_blob(name, block);
-            }
-        } else {
-            i += 1;
-        }
-    }
-    None
+    let (_, qp_blob) = child_blocks(tokens).find(|(keyword, _)| *keyword == "QP_BLOB")?;
+    parse_qp_blob(name, qp_blob)
 }
 
 /// Parses a `/begin QP_BLOB` block: the DAQ list number followed by tagged parameters
@@ -155,7 +113,7 @@ fn parse_qp_blob(name: String, tokens: &[String]) -> Option<CcpSource> {
                 i += 2;
             }
             "CAN_ID_FIXED" => {
-                source.can_id = tokens.get(i + 1).and_then(|t| parse_u32_token(t));
+                source.can_id = tokens.get(i + 1).and_then(|t| parse_can_id_token(t));
                 i += 2;
             }
             "RASTER" => {
@@ -182,8 +140,14 @@ fn parse_qp_blob(name: String, tokens: &[String]) -> Option<CcpSource> {
 /// baudrate, and whether BYTES_ONLY is set.
 fn parse_tp_blob(tokens: &[String]) -> CcpInfo {
     let version = tokens.first().and_then(|t| parse_u16_token(t)).unwrap_or(0);
-    let cro_id = tokens.get(2).and_then(|t| parse_u32_token(t)).unwrap_or(0);
-    let dto_id = tokens.get(3).and_then(|t| parse_u32_token(t)).unwrap_or(0);
+    let cro_id = tokens
+        .get(2)
+        .and_then(|t| parse_can_id_token(t))
+        .unwrap_or(0);
+    let dto_id = tokens
+        .get(3)
+        .and_then(|t| parse_can_id_token(t))
+        .unwrap_or(0);
     let station_address = tokens.get(4).and_then(|t| parse_u16_token(t)).unwrap_or(0);
 
     let mut baudrate = None;

@@ -1,8 +1,8 @@
 //! Runtime DAQ-frame decoder.
 
 use protocol_core::layout::{
-    daq_layout, effective_bit_length, resolve_signal, signal_lookup, timestamp_bytes, Field,
-    SignalPlacement,
+    Field, SignalPlacement, daq_can_id, daq_layout, effective_bit_length, resolve_signal,
+    signal_lookup, timestamp_bytes,
 };
 use protocol_core::protocol::Protocol;
 use protocol_core::types::{A2lProject, ByteOrder, DaqList};
@@ -13,7 +13,6 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SignalLayout {
     pub(crate) name: Arc<str>,
-    pub(crate) pid: u8,
     pub(crate) start_byte: usize,
     pub(crate) size: usize,
     pub(crate) is_signed: bool,
@@ -39,10 +38,9 @@ impl SignalLayout {
     }
 
     /// A layout for a raw pass-through value: unscaled, unsigned, little-endian, unmasked.
-    fn raw(name: Arc<str>, pid: u8, start_byte: usize, size: usize) -> Self {
+    fn raw(name: Arc<str>, start_byte: usize, size: usize) -> Self {
         SignalLayout {
             name,
-            pid,
             start_byte,
             size,
             is_signed: false,
@@ -57,8 +55,8 @@ impl SignalLayout {
         }
     }
 
-    /// A layout decoding `p` at `pid`, narrowed by its `BIT_MASK` if it has one.
-    fn from_placement(pid: u8, p: &SignalPlacement) -> Self {
+    /// A layout decoding `p`, narrowed by its `BIT_MASK` if it has one.
+    fn from_placement(p: &SignalPlacement) -> Self {
         let is_float = p.is_float();
         let (shift, masked) = if is_float {
             (0, false)
@@ -71,7 +69,6 @@ impl SignalLayout {
         };
         SignalLayout {
             name: Arc::from(p.name.as_str()),
-            pid,
             start_byte: p.byte_offset() as usize,
             size: p.span_bytes as usize,
             is_signed: p.is_signed(),
@@ -92,7 +89,6 @@ impl SignalLayout {
 pub(crate) struct DecodedSignal {
     pub(crate) name: Arc<str>,
     pub(crate) value: f64,
-    pub(crate) unit: Arc<str>,
 }
 
 /// Where a signal's raw bits live within a frame and how to interpret them, in bits.
@@ -124,17 +120,6 @@ pub(crate) struct SignalMeta {
     pub(crate) max_value: Option<f64>,
     pub(crate) layout: LayoutMeta,
     pub(crate) conversion: ConversionMeta,
-}
-
-/// The outcome of applying a slave's first-PID report to a DAQ list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PidUpdate {
-    /// There is no DAQ list at the reported index, so the report cannot be attributed.
-    NoSuchList,
-    /// The list already decodes at the reported PID.
-    Unchanged,
-    /// The list was re-keyed; it previously decoded at `previous`.
-    Applied { previous: u8 },
 }
 
 /// One DAQ list's decode layout, held independently of the PIDs it lands on.
@@ -170,14 +155,7 @@ impl Decoder {
         daq_lists: &[DaqList],
         protocol: Protocol,
     ) -> Option<Self> {
-        let can_id_slave = match protocol {
-            Protocol::Xcp => project
-                .xcp_data
-                .as_ref()
-                .and_then(|x| x.xcp_info.as_ref())
-                .and_then(|c| c.can_id_slave)?,
-            Protocol::Ccp => project.ccp_data.as_ref().map(|c| c.info.dto_id)?,
-        };
+        let can_id_slave = daq_can_id(project, protocol)?;
 
         // Where every field lands, computed once by the shared layout
         let ts_bytes = timestamp_bytes(project);
@@ -198,7 +176,6 @@ impl Decoder {
                     };
                     layouts.push(SignalLayout::raw(
                         Arc::from(format!("Timestamp_{pid}")),
-                        pid,
                         1,
                         ts_bytes as usize,
                     ));
@@ -209,7 +186,7 @@ impl Decoder {
                         let Some(Field::Signal(placement)) = fields.next() else {
                             unreachable!("daq_layout must emit one field per entry name");
                         };
-                        layouts.push(SignalLayout::from_placement(pid, &placement));
+                        layouts.push(SignalLayout::from_placement(&placement));
                     }
                 }
 
@@ -278,7 +255,7 @@ impl Decoder {
                         SignalMeta {
                             name,
                             can_id,
-                            pid: l.pid,
+                            pid,
                             comment: (!sig.long_identifier.is_empty())
                                 .then(|| sig.long_identifier.clone()),
                             unit: (!l.unit.is_empty()).then(|| l.unit.to_string()),
@@ -297,7 +274,7 @@ impl Decoder {
                     None => SignalMeta {
                         name,
                         can_id,
-                        pid: l.pid,
+                        pid,
                         comment: None,
                         unit: None,
                         min_value: None,
@@ -349,7 +326,6 @@ impl Decoder {
                 out.push(DecodedSignal {
                     name: l.name.clone(),
                     value: phys * l.factor + l.offset,
-                    unit: l.unit.clone(),
                 });
             }
         }
@@ -367,17 +343,17 @@ impl Decoder {
     }
 
     /// Move a DAQ list's PID range to where the slave says it is.
-    pub(crate) fn set_first_pid(&mut self, daq_index: usize, first_pid: u8) -> PidUpdate {
-        let Some(list) = self.lists.get_mut(daq_index) else {
-            return PidUpdate::NoSuchList;
-        };
+    ///
+    /// Returns the PID the list previously decoded at, or `None` if there is no such list or it already decodes there.
+    pub(crate) fn set_first_pid(&mut self, daq_index: usize, first_pid: u8) -> Option<u8> {
+        let list = self.lists.get_mut(daq_index)?;
         let previous = list.first_pid;
         if previous == first_pid {
-            return PidUpdate::Unchanged;
+            return None;
         }
         list.first_pid = first_pid;
         self.rebuild_pid_map();
-        PidUpdate::Applied { previous }
+        Some(previous)
     }
 
     /// The lists whose PID assignment has been corrected away from the configuration, as `(DaqList::id, configured_pid, pid_in_force)`.
@@ -434,9 +410,7 @@ impl Decoder {
 
     /// Every distinct CAN id a DAQ list actually transmits on, ascending order.
     ///
-    /// Used to declare frame definitions: a CAN id only belongs here if some list's
-    /// DTOs actually land on it, so CanKing isn't told to expect DAQ-shaped payloads
-    /// on an id that only ever carries command/response traffic.
+    /// Used to declare frame definitions: a CAN id only belongs here if some list's DTOs actually land on it.
     pub(crate) fn can_ids(&self) -> Vec<u32> {
         let mut ids: Vec<u32> = self.lists.iter().map(|l| l.can_id).collect();
         ids.sort_unstable();
@@ -467,15 +441,12 @@ impl Decoder {
             .unwrap_or(1)
     }
 
-    /// Re-key the PID lookup, and each layout's reported PID, from the first PIDs currently active.
+    /// Re-key the PID lookup from the first PIDs currently active.
     fn rebuild_pid_map(&mut self) {
         self.by_can_pid.clear();
-        for (list_idx, list) in self.lists.iter_mut().enumerate() {
-            for (odt_idx, layouts) in list.odts.iter_mut().enumerate() {
+        for (list_idx, list) in self.lists.iter().enumerate() {
+            for odt_idx in 0..list.odts.len() {
                 let pid = list.first_pid.wrapping_add(odt_idx as u8);
-                for l in layouts.iter_mut() {
-                    l.pid = pid;
-                }
                 self.by_can_pid
                     .entry((list.can_id, pid))
                     .or_default()
@@ -511,12 +482,7 @@ fn sign_extend(raw: u64, bits: usize) -> i64 {
     if bits == 0 || bits >= 64 {
         return raw as i64;
     }
-    let sign_bit = 1u64 << (bits - 1);
-    if raw & sign_bit != 0 {
-        (raw as i64) - (1i64 << bits)
-    } else {
-        raw as i64
-    }
+    ((raw << (64 - bits)) as i64) >> (64 - bits)
 }
 
 #[cfg(test)]
@@ -526,7 +492,6 @@ mod tests {
     use protocol_core::types::{CanIdSource, DaqList, Odt, OdtEntry, ParsedSignal};
 
     fn two_list_config() -> Config {
-        let mut cfg = Config::sample();
         let mut second = ParsedSignal {
             name: "Load".to_string(),
             long_identifier: "Engine load".to_string(),
@@ -537,20 +502,27 @@ mod tests {
             ..Default::default()
         };
         second.upper_limit = 255.0;
-        cfg.project.signals.push(second);
+        with_second_list(second)
+    }
+
+    /// The sample config plus `signal`, alone in a second DAQ list (id 1, PID 1) on the default CAN id.
+    fn with_second_list(signal: ParsedSignal) -> Config {
+        let mut cfg = Config::sample();
         cfg.daq_lists.push(DaqList {
+            prescaler: 1,
             id: 1,
             first_pid: 1,
             odts: vec![Odt {
                 entries: vec![OdtEntry {
-                    names: vec!["Load".to_string()],
-                    ecu_address: 0x2000,
-                    size: 1,
+                    names: vec![signal.name.clone()],
+                    ecu_address: signal.ecu_address,
+                    size: signal.size,
                 }],
             }],
             event: Some("Task100ms".to_string()),
             can_id: CanIdSource::Default,
         });
+        cfg.project.signals.push(signal);
         cfg
     }
 
@@ -571,10 +543,7 @@ mod tests {
         let mut decoder = build(&cfg);
         assert_eq!(decoder.decode(0x456, &[0x00, 0x90, 0x01]).len(), 1);
 
-        assert_eq!(
-            decoder.set_first_pid(0, 0x12),
-            PidUpdate::Applied { previous: 0x00 }
-        );
+        assert_eq!(decoder.set_first_pid(0, 0x12), Some(0x00));
         assert!(
             decoder.decode(0x456, &[0x00, 0x90, 0x01]).is_empty(),
             "the configured PID must stop decoding once it is known to be wrong"
@@ -586,8 +555,8 @@ mod tests {
         assert_eq!(decoder.corrections(), [(0, 0x00, 0x12)]);
         assert_eq!(decoder.list_pid(0), Some((0, 0x12)));
 
-        assert_eq!(decoder.set_first_pid(0, 0x12), PidUpdate::Unchanged);
-        assert_eq!(decoder.set_first_pid(9, 0x12), PidUpdate::NoSuchList);
+        assert_eq!(decoder.set_first_pid(0, 0x12), None, "unchanged");
+        assert_eq!(decoder.set_first_pid(9, 0x12), None, "no such list");
     }
 
     #[test]
@@ -595,10 +564,7 @@ mod tests {
         let cfg = two_list_config();
         let mut decoder = build(&cfg);
 
-        assert_eq!(
-            decoder.set_first_pid(1, 0x12),
-            PidUpdate::Applied { previous: 0x01 }
-        );
+        assert_eq!(decoder.set_first_pid(1, 0x12), Some(0x01));
         assert_eq!(
             decoder.decode(0x456, &[0x00, 0x90, 0x01]).len(),
             1,
@@ -724,20 +690,19 @@ mod tests {
     #[test]
     fn decodes_scaled_unsigned_signal() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let frame = [0x00, 0x90, 0x01];
         let decoded = decoder.decode(0x456, &frame);
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].name.as_ref(), "Rpm");
         assert_eq!(decoded[0].value, 200.0);
-        assert_eq!(decoded[0].unit.as_ref(), "rpm");
     }
 
     #[test]
     fn ignores_other_can_ids_and_unknown_pids() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
         assert!(decoder.decode(0x123, &[0x00, 0x90, 0x01]).is_empty());
         assert!(decoder.decode(0x456, &[0x09, 0x90, 0x01]).is_empty());
     }
@@ -745,14 +710,14 @@ mod tests {
     #[test]
     fn truncated_frame_is_skipped() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
         assert!(decoder.decode(0x456, &[0x00]).is_empty());
     }
 
     #[test]
     fn signal_metadata_resolves_project_info() {
         let cfg = Config::sample();
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
         let meta = decoder.signal_metadata(&cfg.project);
         assert_eq!(meta.len(), 1);
         assert_eq!(meta[0].name, "Rpm");
@@ -771,7 +736,7 @@ mod tests {
         daq_info.timestamp_fixed = true;
         daq_info.timestamp_size = 4;
 
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let frame = [0x00, 0x10, 0x00, 0x00, 0x00, 0x90, 0x01];
         let decoded = decoder.decode(0x456, &frame);
@@ -788,8 +753,7 @@ mod tests {
 
     #[test]
     fn masked_bitfield_signal_decodes_only_its_own_bits() {
-        let mut cfg = Config::sample();
-        let masked = ParsedSignal {
+        let cfg = with_second_list(ParsedSignal {
             name: "Masked".to_string(),
             long_identifier: String::new(),
             conversion: None,
@@ -798,23 +762,9 @@ mod tests {
             bit_mask: Some(0x0FF0),
             event: Some("Task100ms".to_string()),
             ..Default::default()
-        };
-        cfg.project.signals.push(masked);
-        cfg.daq_lists.push(DaqList {
-            id: 1,
-            first_pid: 1,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Masked".to_string()],
-                    ecu_address: 0x3000,
-                    size: 2,
-                }],
-            }],
-            event: Some("Task100ms".to_string()),
-            can_id: CanIdSource::Default,
         });
 
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let decoded = decoder.decode(0x456, &[0x01, 0xF0, 0x00]);
         assert_eq!(decoded.len(), 1);
@@ -839,8 +789,7 @@ mod tests {
 
     #[test]
     fn full_width_bit_mask_is_a_no_op() {
-        let mut cfg = Config::sample();
-        let unmasked = ParsedSignal {
+        let cfg = with_second_list(ParsedSignal {
             name: "FullMask".to_string(),
             long_identifier: String::new(),
             conversion: None,
@@ -849,23 +798,9 @@ mod tests {
             bit_mask: Some(0xFFFF),
             event: Some("Task100ms".to_string()),
             ..Default::default()
-        };
-        cfg.project.signals.push(unmasked);
-        cfg.daq_lists.push(DaqList {
-            id: 1,
-            first_pid: 1,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["FullMask".to_string()],
-                    ecu_address: 0x4000,
-                    size: 2,
-                }],
-            }],
-            event: Some("Task100ms".to_string()),
-            can_id: CanIdSource::Default,
         });
 
-        let decoder = Decoder::build(&cfg.project, &cfg.daq_lists, Protocol::Xcp).unwrap();
+        let decoder = build(&cfg);
 
         let decoded = decoder.decode(0x456, &[0x01, 0x34, 0x12]);
         assert_eq!(decoded[0].value, 0x1234 as f64);
@@ -887,7 +822,7 @@ mod tests {
         let at = |start_byte, size, big_endian, shift| SignalLayout {
             big_endian,
             shift,
-            ..SignalLayout::raw(Arc::from("x"), 0, start_byte, size)
+            ..SignalLayout::raw(Arc::from("x"), start_byte, size)
         };
         assert_eq!(at(1, 2, false, 0).lsb_start_bit(), 8);
         assert_eq!(

@@ -1,8 +1,14 @@
+//! The DBC that decodes logged DAQ frames: one message per DAQ CAN id, multiplexed by the PID in byte 0.
+//!
+//! Signal positions come from [`crate::layout`].
+//!
+//! Scaling is the COMPU_METHOD's factor and offset, `TAB_VERB` tables become `VAL_` entries, floats get `SIG_VALTYPE_`, and extended ids carry bit 31.
+
+use crate::Protocol;
 use crate::a2l::{A2lProject, ByteOrder, CompuMethod, ParsedSignal};
 use crate::daq::DaqList;
-use crate::layout::{daq_can_id, daq_layout, timestamp_bytes, Field, SignalPlacement};
+use crate::layout::{Field, SignalPlacement, daq_can_id, daq_layout, timestamp_bytes};
 use crate::traceability::traceability_lines;
-use crate::Protocol;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as FmtWrite};
@@ -72,7 +78,8 @@ BU_: Slave\n\
 /// The DBC message name every DAQ CAN id gets
 pub const DAQ_MESSAGE_NAME: &str = "DAQ";
 
-fn message_name(can_id: u32, total_messages: usize) -> String {
+/// The DBC message name for `can_id` when the DBC has `total_messages` DAQ messages.
+pub(crate) fn message_name(can_id: u32, total_messages: usize) -> String {
     if total_messages <= 1 {
         DAQ_MESSAGE_NAME.to_string()
     } else {
@@ -110,6 +117,7 @@ pub fn create_dbc_file(
     let mut fd_frame_formats = String::new();
 
     for (can_id, lists) in &groups {
+        let msg_id = dbc_message_id(*can_id);
         // DLC = max payload bytes of any single ODT on this CAN id + 1 for the PID byte.
         let max_odt_bytes: u16 = lists
             .iter()
@@ -128,7 +136,7 @@ pub fn create_dbc_file(
         };
 
         let name = message_name(*can_id, groups.len());
-        let _ = writeln!(out, "BO_ {can_id} {name}: {dlc} Slave");
+        let _ = writeln!(out, "BO_ {msg_id} {name}: {dlc} Slave");
         out.push_str(" SG_ PID M : 0|8@1+ (1,0) [0|255] \"\"  Unspecified__XXX\n");
 
         for field in daq_layout(project, lists) {
@@ -165,7 +173,7 @@ pub fn create_dbc_file(
                 let _ = writeln!(
                     sig_valtypes,
                     "SIG_VALTYPE_ {} {} : {};",
-                    can_id,
+                    msg_id,
                     sanitize_name(&placement.name),
                     valtype,
                 );
@@ -174,14 +182,14 @@ pub fn create_dbc_file(
                 .conversion
                 .as_ref()
                 .and_then(|c| project.compu_methods.get(&c.identifier))
+                && !cm.text_table.is_empty()
+                && val_table_emitted.insert(sig.name.clone())
             {
-                if !cm.text_table.is_empty() && val_table_emitted.insert(sig.name.clone()) {
-                    val_tables.push_str(&format_val_table(
-                        *can_id,
-                        &sanitize_name(&placement.name),
-                        cm,
-                    ));
-                }
+                val_tables.push_str(&format_val_table(
+                    msg_id,
+                    &sanitize_name(&placement.name),
+                    cm,
+                ));
             }
         }
 
@@ -191,11 +199,7 @@ pub fn create_dbc_file(
     }
 
     let prov = traceability_lines(source_name, project, daq_lists, protocol);
-    if !prov.is_empty() {
-        let body = prov.join("\n").replace('"', "'");
-        out.push('\n');
-        let _ = writeln!(out, "CM_ \"{body}\";");
-    }
+    let _ = writeln!(out, "\nCM_ \"{}\";", prov.join("\n").replace('"', "'"));
 
     if !sig_valtypes.is_empty() {
         out.push('\n');
@@ -209,7 +213,7 @@ pub fn create_dbc_file(
 
     if can_fd.is_some() {
         out.push('\n');
-        out.push_str(&fd_attribute_definitions());
+        out.push_str(FD_ATTRIBUTE_DEFINITIONS);
         out.push_str(&fd_frame_formats);
     }
 
@@ -227,23 +231,29 @@ fn fd_frame_len(needed: u16) -> u16 {
         .unwrap_or(64)
 }
 
-/// Returns the DBC attribute definitions shared by every CAN FD message, emitted once per file.
-fn fd_attribute_definitions() -> String {
-    let mut out = String::new();
-    out.push_str("BA_DEF_ \"BusType\" STRING ;\n");
-    out.push_str("BA_DEF_ BO_ \"VFrameFormat\" ENUM  \"StandardCAN\",\"ExtendedCAN\",\"reserved\",\
-                \"J1939PG\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\
-                \"reserved\",\"reserved\",\"reserved\",\"reserved\",\"StandardCAN_FD\",\"ExtendedCAN_FD\";\n");
-    out.push_str("BA_DEF_DEF_ \"BusType\" \"CAN FD\";\n");
-    out.push_str("BA_DEF_DEF_ \"VFrameFormat\" \"StandardCAN\";\n");
-    out.push_str("BA_ \"BusType\" \"CAN FD\";\n");
-    out
-}
+/// The DBC attribute definitions shared by every CAN FD message, emitted once per file.
+const FD_ATTRIBUTE_DEFINITIONS: &str = "BA_DEF_ \"BusType\" STRING ;\n\
+    BA_DEF_ BO_ \"VFrameFormat\" ENUM  \"StandardCAN\",\"ExtendedCAN\",\"reserved\",\
+    \"J1939PG\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\"reserved\",\
+    \"reserved\",\"reserved\",\"reserved\",\"reserved\",\"StandardCAN_FD\",\"ExtendedCAN_FD\";\n\
+    BA_DEF_DEF_ \"BusType\" \"CAN FD\";\n\
+    BA_DEF_DEF_ \"VFrameFormat\" \"StandardCAN\";\n\
+    BA_ \"BusType\" \"CAN FD\";\n";
 
 /// Returns the `VFrameFormat` attribute value for one CAN FD message.
 fn fd_frame_format_line(can_id: u32) -> String {
     let frame_format = if can_id > 0x7FF { 15 } else { 14 };
-    format!("BA_ \"VFrameFormat\" BO_ {can_id} {frame_format};\n")
+    let msg_id = dbc_message_id(can_id);
+    format!("BA_ \"VFrameFormat\" BO_ {msg_id} {frame_format};\n")
+}
+
+/// The DBC message id for `can_id`: DBC marks an extended (29-bit) id by setting bit 31.
+fn dbc_message_id(can_id: u32) -> u32 {
+    if can_id > 0x7FF {
+        can_id | 0x8000_0000
+    } else {
+        can_id
+    }
 }
 
 /// Render the `SG_` line for a placement whose name resolved to `sig`.
@@ -369,6 +379,24 @@ mod tests {
         }
     }
 
+    /// A list holding one single-entry ODT.
+    fn daq_list(id: u16, name: &str, ecu_address: u64, size: u16, can_id: CanIdSource) -> DaqList {
+        DaqList {
+            prescaler: 1,
+            id,
+            first_pid: 0,
+            event: None,
+            odts: vec![Odt {
+                entries: vec![OdtEntry {
+                    names: vec![name.into()],
+                    ecu_address,
+                    size,
+                }],
+            }],
+            can_id,
+        }
+    }
+
     fn daq_lists_16_bytes() -> Vec<DaqList> {
         let entries = (0..4)
             .map(|i| OdtEntry {
@@ -378,6 +406,7 @@ mod tests {
             })
             .collect();
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
@@ -392,6 +421,7 @@ mod tests {
             &project(Some(CanFdInfo {
                 max_dlc: 24,
                 data_baudrate: Some(2_000_000),
+                ..Default::default()
             })),
             &daq_lists_16_bytes(),
             Protocol::Xcp,
@@ -429,19 +459,13 @@ mod tests {
             ecu_address: 0x20005EFC,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["FloatSignal".into()],
-                    ecu_address: 0x20005EFC,
-                    size: 4,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(
+            0,
+            "FloatSignal",
+            0x20005EFC,
+            4,
+            CanIdSource::Default,
+        )];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(
             dbc.contains("SIG_VALTYPE_ 1110 FloatSignal : 1;"),
@@ -487,21 +511,10 @@ mod tests {
                 ],
                 default_text: None,
                 formula: None,
+                unsupported: None,
             },
         );
-        let daq = vec![DaqList {
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["EngSt".into()],
-                    ecu_address: 0x10,
-                    size: 1,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "EngSt", 0x10, 1, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(
             dbc.contains("VAL_ 1110 EngSt 0 \"ENGST_DEFAULT\" 1 \"ENGST_START\" ;"),
@@ -524,19 +537,7 @@ mod tests {
             ecu_address: 0x10,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Sig".into()],
-                    ecu_address: 0x10,
-                    size: 2,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "Sig", 0x10, 2, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(dbc.contains(" SG_ Timestamp_0 m0 : 8|32@1+"), "got:\n{dbc}");
         assert!(
@@ -559,19 +560,7 @@ mod tests {
             ecu_address: 0x10,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Sig".into()],
-                    ecu_address: 0x10,
-                    size: 2,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "Sig", 0x10, 2, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(dbc.contains(" SG_ Timestamp_0 m0 : 8|32@1+"), "got:\n{dbc}");
         assert!(
@@ -594,19 +583,7 @@ mod tests {
             ecu_address: 0x10,
             ..Default::default()
         }];
-        let daq = vec![DaqList {
-            id: 0,
-            first_pid: 0,
-            event: None,
-            odts: vec![Odt {
-                entries: vec![OdtEntry {
-                    names: vec!["Sig".into()],
-                    ecu_address: 0x10,
-                    size: 2,
-                }],
-            }],
-            can_id: CanIdSource::Default,
-        }];
+        let daq = vec![daq_list(0, "Sig", 0x10, 2, CanIdSource::Default)];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
         assert!(!dbc.contains("Timestamp_0"));
         assert!(
@@ -672,6 +649,33 @@ mod tests {
     }
 
     #[test]
+    fn extended_daq_id_sets_bit_31_on_every_message_reference() {
+        let mut proj = project(Some(CanFdInfo {
+            max_dlc: 64,
+            ..Default::default()
+        }));
+        proj.xcp_data
+            .as_mut()
+            .unwrap()
+            .xcp_info
+            .as_mut()
+            .unwrap()
+            .can_id_slave = Some(0x18FF0002);
+        let dbc = create_dbc_file(&proj, &daq_lists_16_bytes(), Protocol::Xcp, "test.a2l").unwrap();
+        let msg_id = 0x8000_0000u32 | 0x18FF0002;
+        assert!(
+            dbc.contains(&format!("BO_ {msg_id} DAQ:")),
+            "got:
+{dbc}"
+        );
+        assert!(
+            dbc.contains(&format!("BA_ \"VFrameFormat\" BO_ {msg_id} 15;")),
+            "got:
+{dbc}"
+        );
+    }
+
+    #[test]
     fn emits_one_message_per_can_id() {
         use crate::a2l::ParsedSignal;
         let mut proj = project(None);
@@ -690,32 +694,8 @@ mod tests {
             },
         ];
         let daq = vec![
-            DaqList {
-                id: 0,
-                first_pid: 0,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["Rpm".into()],
-                        ecu_address: 0x10,
-                        size: 2,
-                    }],
-                }],
-                can_id: CanIdSource::Default,
-            },
-            DaqList {
-                id: 1,
-                first_pid: 0,
-                event: None,
-                odts: vec![Odt {
-                    entries: vec![OdtEntry {
-                        names: vec!["Load".into()],
-                        ecu_address: 0x2000,
-                        size: 1,
-                    }],
-                }],
-                can_id: CanIdSource::Fixed { id: 0x789 },
-            },
+            daq_list(0, "Rpm", 0x10, 2, CanIdSource::Default),
+            daq_list(1, "Load", 0x2000, 1, CanIdSource::Fixed { id: 0x789 }),
         ];
         let dbc = create_dbc_file(&proj, &daq, Protocol::Xcp, "test.a2l").unwrap();
 

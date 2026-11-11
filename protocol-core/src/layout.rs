@@ -5,8 +5,8 @@
 //! signal X, and how is it scaled".
 
 use crate::protocol::Protocol;
-use crate::types::{A2lProject, ByteOrder, DaqList, ParsedSignal};
-use std::collections::HashMap;
+use crate::types::{A2lProject, ByteOrder, DaqList, OdtEntry, ParsedSignal};
+use std::collections::{BTreeMap, HashMap};
 
 /// One field of a DAQ frame, in the order the DBC declares them.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,25 +81,18 @@ pub fn daq_can_id(project: &A2lProject, protocol: Protocol) -> Option<u32> {
     }
 }
 
-/// Group DAQ lists by the CAN id they actually transmit on, given the transport's shared
-/// default id. Ascending by id.
+/// Group DAQ lists by the CAN id they actually transmit on, given the transport's shared default id. Ascending by id.
 ///
-/// Most lists share the module's default id, but a list may declare its own via XCP's
-/// `DAQ_LIST_CAN_ID` or CCP's `CAN_ID_FIXED` (see [`crate::types::CanIdSource`]). A caller that
-/// needs one message/hook per CAN id (the DBC writer, the standalone t-script generator) packs
-/// each group through the normal single-CAN-id layout pass, mirroring how `canking-service`'s
-/// `Decoder` keys frames by `(CAN id, PID)` rather than PID alone.
+/// Most lists share the module's default id, but a list may declare its own via XCP's `DAQ_LIST_CAN_ID` or CCP's `CAN_ID_FIXED` (see [`crate::types::CanIdSource`]).
+///
+/// A caller that needs one message/hook per CAN id (the DBC writer, the standalone t-script generator) packs each group through the normal single-CAN-id layout pass.
 pub fn group_by_can_id(daq_lists: &[DaqList], default_id: u32) -> Vec<(u32, Vec<DaqList>)> {
-    let mut groups: Vec<(u32, Vec<DaqList>)> = Vec::new();
+    let mut groups: BTreeMap<u32, Vec<DaqList>> = BTreeMap::new();
     for list in daq_lists {
         let id = list.can_id.resolve(default_id);
-        match groups.iter_mut().find(|(gid, _)| *gid == id) {
-            Some((_, lists)) => lists.push(list.clone()),
-            None => groups.push((id, vec![list.clone()])),
-        }
+        groups.entry(id).or_default().push(list.clone());
     }
-    groups.sort_by_key(|(id, _)| *id);
-    groups
+    groups.into_iter().collect()
 }
 
 /// Number of timestamp bytes the ECU prepends to the first ODT of each DAQ list.
@@ -120,18 +113,31 @@ pub fn signal_lookup(project: &A2lProject) -> HashMap<&str, &ParsedSignal> {
         .collect()
 }
 
-/// Resolve a signal name to its A2L definition: an exact match first, else
-/// the parent of a chunked array entry (`Name[i]`).
+/// Resolve a signal name to its A2L definition: an exact match first, else the parent of a chunked array entry (`Name[i]`).
 pub fn resolve_signal<'a>(
     signal_map: &HashMap<&str, &'a ParsedSignal>,
     name: &str,
 ) -> Option<&'a ParsedSignal> {
-    signal_map.get(name).copied().or_else(|| {
-        name.rfind('[')
-            .map(|i| &name[..i])
-            .and_then(|base| signal_map.get(base))
-            .copied()
-    })
+    signal_map
+        .get(name)
+        .or_else(|| chunk_parent(name).and_then(|base| signal_map.get(base)))
+        .copied()
+}
+
+/// The parent of a chunk name `Name[i]`, `None` for any other name.
+fn chunk_parent(name: &str) -> Option<&str> {
+    name.rfind('[').map(|i| &name[..i])
+}
+
+/// The `ECU_ADDRESS_EXTENSION` an entry is sampled with.
+///
+/// Packing never merges signals with different extensions into one entry, so its first signal speaks for all of them.
+pub fn address_extension(signal_map: &HashMap<&str, &ParsedSignal>, entry: &OdtEntry) -> u8 {
+    entry
+        .names
+        .first()
+        .and_then(|name| resolve_signal(signal_map, name))
+        .map_or(0, |s| s.address_extension)
 }
 
 /// A signal's scaling: `(factor, offset, unit)`, defaulting to unscaled/unitless.
@@ -166,42 +172,64 @@ pub fn daq_layout(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Field> {
             let mut byte_offset: u32 = ts_in_odt as u32;
 
             for entry in &odt.entries {
-                let mut bit_cursor: u32 = 8 + byte_offset * 8;
+                let entry_start: u32 = 8 + byte_offset * 8;
+                let entry_end = entry.ecu_address + entry.size as u64;
+                // Where the next name lands when its address can't place it.
+                let mut cursor: u16 = 0;
                 for name in &entry.names {
                     // Exact lookup first, then try to find a parent signal for a split chunk.
-                    let (signal, chunk_size) = signal_map
-                        .get(name.as_str())
-                        .map(|s| (Some((*s).clone()), None))
-                        .unwrap_or_else(|| {
-                            let parent = name
-                                .rfind('[')
-                                .map(|i| &name[..i])
-                                .and_then(|base| signal_map.get(base))
-                                .map(|s| (*s).clone());
-                            (parent, Some(entry.size))
-                        });
+                    let exact = signal_map.get(name.as_str()).map(|s| (*s).clone());
+                    let parent = || {
+                        chunk_parent(name)
+                            .and_then(|base| signal_map.get(base))
+                            .map(|s| (*s).clone())
+                    };
+                    // A signal sits at its own address inside the entry, which may start earlier or hold other signals.
+                    // A chunk is the part of its parent the entry covers.
+                    let (signal, chunk_size, offset_in_entry) = match exact {
+                        Some(sig) => {
+                            let end = sig.ecu_address + sig.size as u64;
+                            let inside = sig.ecu_address >= entry.ecu_address && end <= entry_end;
+                            let at = if inside {
+                                (sig.ecu_address - entry.ecu_address) as u16
+                            } else {
+                                cursor
+                            };
+                            (Some(sig), None, at)
+                        }
+                        None => {
+                            let parent = parent();
+                            let covered = parent.as_ref().and_then(|p| {
+                                let from = p.ecu_address.max(entry.ecu_address);
+                                let to = (p.ecu_address + p.size as u64).min(entry_end);
+                                (from < to).then(|| {
+                                    ((from - entry.ecu_address) as u16, (to - from) as u16)
+                                })
+                            });
+                            let (at, size) =
+                                covered.unwrap_or((cursor, entry.size.saturating_sub(cursor)));
+                            (parent, Some(size), at)
+                        }
+                    };
+                    let bit_cursor = entry_start + offset_in_entry as u32 * 8;
 
-                    let bit_length = match (&signal, chunk_size) {
-                        (_, Some(size)) => size as u32 * 8,
-                        (Some(sig), None) => sig
-                            .bit_mask
-                            .map(effective_bit_length)
-                            .unwrap_or(sig.size as u32 * 8),
+                    // A masked signal still occupies its full declared width, the span is independent of `bit_length`.
+                    let (bit_length, span_bytes) = match (&signal, chunk_size) {
+                        (_, Some(size)) => (size as u32 * 8, size),
+                        (Some(sig), None) => (
+                            sig.bit_mask
+                                .map(effective_bit_length)
+                                .unwrap_or(sig.size as u32 * 8),
+                            sig.size,
+                        ),
                         // Unresolved name: the whole entry passes through raw.
-                        (None, None) => entry.size as u32 * 8,
+                        (None, None) => (entry.size as u32 * 8, entry.size),
                     };
 
                     let (factor, offset, unit) = signal
                         .as_ref()
                         .map(|sig| scaling(project, sig))
                         .unwrap_or((1.0, 0.0, String::new()));
-
-                    // A masked signal still occupies its full declared width, so the span is independent of `bit_length`.
-                    let span_bytes = match (&signal, chunk_size) {
-                        (_, Some(size)) => size,
-                        (Some(sig), None) => sig.size,
-                        (None, None) => entry.size,
-                    };
 
                     fields.push(Field::Signal(Box::new(SignalPlacement {
                         name: name.clone(),
@@ -215,7 +243,7 @@ pub fn daq_layout(project: &A2lProject, daq_lists: &[DaqList]) -> Vec<Field> {
                         offset,
                         unit,
                     })));
-                    bit_cursor += span_bytes as u32 * 8;
+                    cursor = offset_in_entry + span_bytes;
                 }
                 byte_offset += entry.size as u32;
             }
@@ -251,10 +279,8 @@ pub fn find_placement<'a>(
         .or_else(|| {
             placements.iter().find(|p| {
                 p.chunk_size.is_some()
-                    && p.name.rfind('[').is_some_and(|i| {
-                        let parent = &p.name[..i];
-                        parent == name || sanitize(parent) == ident
-                    })
+                    && chunk_parent(&p.name)
+                        .is_some_and(|parent| parent == name || sanitize(parent) == ident)
             })
         })
 }
@@ -290,22 +316,13 @@ mod tests {
 
     fn one_odt(entries: Vec<OdtEntry>) -> Vec<DaqList> {
         vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 0,
             event: None,
             odts: vec![Odt { entries }],
             can_id: CanIdSource::Default,
         }]
-    }
-
-    fn placements(fields: &[Field]) -> Vec<&SignalPlacement> {
-        fields
-            .iter()
-            .filter_map(|f| match f {
-                Field::Signal(p) => Some(p.as_ref()),
-                Field::Timestamp(_) => None,
-            })
-            .collect()
     }
 
     #[test]
@@ -326,8 +343,7 @@ mod tests {
                 size: 4,
             },
         ]);
-        let fields = daq_layout(&project, &daq);
-        let p = placements(&fields);
+        let p = signal_placements(&project, &daq);
         assert_eq!(p.len(), 2);
         assert_eq!(
             (p[0].start_bit, p[0].bit_length, p[0].byte_offset()),
@@ -360,6 +376,7 @@ mod tests {
             size: 2,
         };
         let daq = vec![DaqList {
+            prescaler: 1,
             id: 0,
             first_pid: 3,
             event: None,
@@ -386,7 +403,7 @@ mod tests {
         assert_eq!(timestamps[0].pid, 3);
         assert_eq!(timestamps[0].bit_length, 32);
 
-        let p = placements(&fields);
+        let p = signal_placements(&project, &daq);
         assert_eq!((p[0].pid, p[0].byte_offset()), (3, 5));
         assert_eq!((p[1].pid, p[1].byte_offset()), (4, 1));
     }
@@ -411,8 +428,7 @@ mod tests {
                 size: 1,
             },
         ]);
-        let fields = daq_layout(&project, &daq);
-        let p = placements(&fields);
+        let p = signal_placements(&project, &daq);
         assert_eq!(p[0].bit_length, 8, "0x0FF0 spans 8 bits");
         assert_eq!(p[0].bit_mask(), Some(0x0FF0));
         assert_eq!(
@@ -447,8 +463,7 @@ mod tests {
             ecu_address: 0x10,
             size: 4,
         }]);
-        let fields = daq_layout(&project, &daq);
-        let p = placements(&fields);
+        let p = signal_placements(&project, &daq);
         assert_eq!(p[0].chunk_size, Some(4));
         assert_eq!(
             p[0].bit_length, 32,
@@ -461,6 +476,54 @@ mod tests {
     }
 
     #[test]
+    fn last_chunk_sharing_an_entry_ends_at_its_parent() {
+        // Big (10 bytes) split 7+3; the 3-byte tail merged with the adjacent Next.
+        let mut big = signal("Big", 10);
+        big.ecu_address = 0x100;
+        let mut next = signal("Next", 2);
+        next.ecu_address = 0x10A;
+        let project = A2lProject {
+            signals: vec![big, next],
+            ..Default::default()
+        };
+        let daq = one_odt(vec![OdtEntry {
+            names: vec!["Big[1]".into(), "Next".into()],
+            ecu_address: 0x107,
+            size: 5,
+        }]);
+        let p = signal_placements(&project, &daq);
+        assert_eq!(p[0].chunk_size, Some(3));
+        assert_eq!(
+            (p[1].name.as_str(), p[1].byte_offset()),
+            ("Next", 4),
+            "PID + 3 chunk bytes"
+        );
+    }
+
+    #[test]
+    fn signals_sit_at_their_address_in_a_granule_aligned_entry() {
+        let mut a = signal("A", 1);
+        a.ecu_address = 0x11;
+        let mut b = signal("B", 1);
+        b.ecu_address = 0x12;
+        let project = A2lProject {
+            signals: vec![a, b],
+            ..Default::default()
+        };
+        let daq = one_odt(vec![OdtEntry {
+            names: vec!["A".into(), "B".into()],
+            ecu_address: 0x10,
+            size: 4,
+        }]);
+        let p = signal_placements(&project, &daq);
+        assert_eq!(
+            (p[0].byte_offset(), p[1].byte_offset()),
+            (2, 3),
+            "PID + lead byte, then the next byte"
+        );
+    }
+
+    #[test]
     fn unknown_name_passes_through_as_the_whole_entry() {
         let project = A2lProject::default();
         let daq = one_odt(vec![OdtEntry {
@@ -468,8 +531,7 @@ mod tests {
             ecu_address: 0x10,
             size: 2,
         }]);
-        let fields = daq_layout(&project, &daq);
-        let p = placements(&fields);
+        let p = signal_placements(&project, &daq);
         assert_eq!(p[0].bit_length, 16);
         assert!(p[0].signal.is_none());
         assert_eq!((p[0].factor, p[0].offset), (1.0, 0.0));
